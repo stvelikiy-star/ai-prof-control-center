@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import fcntl
 import json
 import os
@@ -76,10 +78,43 @@ def git_clean(project: Path) -> bool:
 
 
 def safe_move(task: Path, target_dir: Path) -> Path:
+    # Atomically move a task without replacing an existing destination.
     target = target_dir / task.name
-    if target.exists():
-        raise FileExistsError(f"Destination task already exists: {target}")
-    os.rename(task, target)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+
+    if renameat2 is not None:
+        at_fdcwd = -100
+        rename_noreplace = 1
+        result = renameat2(
+            at_fdcwd,
+            os.fsencode(task),
+            at_fdcwd,
+            os.fsencode(target),
+            rename_noreplace,
+        )
+        if result == 0:
+            return target
+
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(f"Destination task already exists: {target}")
+        if error not in {errno.ENOSYS, errno.EINVAL}:
+            raise OSError(error, os.strerror(error), str(target))
+
+    try:
+        os.link(task, target)
+    except FileExistsError:
+        raise FileExistsError(f"Destination task already exists: {target}") from None
+
+    try:
+        task.unlink()
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
     return target
 
 
@@ -153,8 +188,10 @@ def main() -> int:
 
         if args.self_test:
             context = load_context(root, "agents/ak-bermet")
-            assert all(context.values())
-            assert redact("TOKEN=abc") == "[REDACTED]"
+            if not all(context.values()):
+                raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
+            if redact("TOKEN=abc") != "[REDACTED]":
+                raise RuntimeError("SELF_TEST_REDACTION_FAILED")
             print("AI PROF orchestrator self-test: PASS")
             return 0
 
