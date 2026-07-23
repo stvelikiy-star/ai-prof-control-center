@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,7 +24,14 @@ REQUIRED_FIELDS = [
     "Out-of-Scope",
     "Pass-Criteria",
     "Required-Checks",
+    "Required-Commands",
+    "Required-Environment",
     "Owner-Approval-Required",
+]
+
+SECRET_PATTERNS = [
+    re.compile(r"(?i)(token|password|secret|api[_-]?key)\s*=\s*\S+"),
+    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
 ]
 
 
@@ -38,25 +45,10 @@ class Paths:
     completed: Path
     blocked: Path
     logs: Path
+    lock: Path
 
 
-def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
-
-
-def load_config(root: Path) -> dict:
-    path = root / "orchestrator" / "config.json"
-    with path.open("r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def parse_task(path: Path) -> dict[str, str]:
+def parse_task(path: Path) -> tuple[dict[str, str], str]:
     text = path.read_text(encoding="utf-8")
     values: dict[str, str] = {}
     for field in REQUIRED_FIELDS:
@@ -68,161 +60,155 @@ def parse_task(path: Path) -> dict[str, str]:
         raise ValueError("Missing required fields: " + ", ".join(missing))
     if values["Owner-Approval-Required"].lower() not in {"yes", "no"}:
         raise ValueError("Owner-Approval-Required must be yes or no")
-    return values
+    return values, text
 
 
 def git_clean(project: Path) -> bool:
-    result = run(["git", "status", "--porcelain"], cwd=project)
+    import subprocess
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(project),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
     return not result.stdout.strip()
 
 
-def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
-
-
-def next_task(paths: Paths) -> Path | None:
-    tasks = sorted(paths.pending.glob("*.md"))
-    return tasks[0] if tasks else None
-
-
-def move_task(task: Path, target_dir: Path) -> Path:
+def safe_move(task: Path, target_dir: Path) -> Path:
     target = target_dir / task.name
-    os.replace(task, target)
+    if target.exists():
+        raise FileExistsError(f"Destination task already exists: {target}")
+    os.rename(task, target)
     return target
 
 
-def validate_task(task: Path, config: dict) -> tuple[dict[str, str], Path]:
-    data = parse_task(task)
-    project = Path(data["Project-Path"]).expanduser().resolve()
-    if not (project / ".git").is_dir():
-        raise ValueError(f"Project repository not found: {project}")
-    if config.get("require_clean_worktree", True) and not git_clean(project):
-        raise ValueError(f"Project working tree is not clean: {project}")
-    if data["Work-Branch"] in {"main", "develop"}:
-        raise ValueError("Work-Branch must be a dedicated feature/fix branch")
-    return data, project
+def split_csv(value: str) -> list[str]:
+    if value.strip().lower() in {"none", "-"}:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def build_prompt(task_path: Path, data: dict[str, str], root: Path) -> str:
-    context_path = root / data["Agent-Context"]
-    if not context_path.exists():
-        raise ValueError(f"Agent context not found: {context_path}")
+def redact(text: str) -> str:
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
-    system_path = context_path / "SYSTEM_INSTRUCTIONS.md"
-    source_path = context_path / "SOURCE_POLICY.md"
-    state_path = context_path / "STATE.md"
-    for required in (system_path, source_path, state_path):
-        if not required.exists():
-            raise ValueError(f"Required context file missing: {required}")
 
-    return f"""You are Claude Code, the implementation agent.
+def load_context(root: Path, relative: str) -> dict[str, str]:
+    context = (root / relative).resolve()
+    if root not in context.parents:
+        raise ValueError("Agent context must remain inside Control Center")
+    required = ["SYSTEM_INSTRUCTIONS.md", "SOURCE_POLICY.md", "STATE.md"]
+    loaded: dict[str, str] = {}
+    for name in required:
+        path = context / name
+        if not path.is_file() or not path.stat().st_size:
+            raise ValueError(f"Required context file missing or empty: {path}")
+        loaded[name] = path.read_text(encoding="utf-8")
+    return loaded
 
-Read and obey:
-- {system_path}
-- {source_path}
-- {state_path}
-- Task: {task_path}
 
-Repository: {data['Project-Path']}
-Base branch: {data['Base-Branch']}
-Work branch: {data['Work-Branch']}
+def validate_access(data: dict[str, str]) -> None:
+    missing_commands = [cmd for cmd in split_csv(data["Required-Commands"]) if shutil.which(cmd) is None]
+    if missing_commands:
+        raise RuntimeError("BLOCKED_MISSING_COMMANDS: " + ", ".join(missing_commands))
 
-Rules:
-- Do not work directly on main or develop.
-- Do not merge.
-- Do not deploy production.
-- Do not print secrets.
-- Stop with BLOCKED_MISSING_ACCESS when required access is absent.
-- Complete only the approved scope.
-- Run the required checks.
-- Commit changes and produce a concise report with commit SHA, changed files, checks, residual risks.
-"""
+    missing_env = [name for name in split_csv(data["Required-Environment"]) if not os.environ.get(name)]
+    if missing_env:
+        raise RuntimeError("BLOCKED_MISSING_ENVIRONMENT: " + ", ".join(missing_env))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
     paths = Paths(
         root=root,
-        pending=root / "queue" / "pending",
-        active=root / "queue" / "active",
-        review=root / "queue" / "review",
-        failed=root / "queue" / "failed",
-        completed=root / "queue" / "completed",
-        blocked=root / "queue" / "blocked",
-        logs=root / "logs" / "orchestrator",
+        pending=root / "queue/pending",
+        active=root / "queue/active",
+        review=root / "queue/review",
+        failed=root / "queue/failed",
+        completed=root / "queue/completed",
+        blocked=root / "queue/blocked",
+        logs=root / "logs/orchestrator",
+        lock=root / "orchestrator/orchestrator.lock",
     )
-    config = load_config(root)
 
-    for directory in vars(paths).values():
-        if isinstance(directory, Path):
-            directory.mkdir(parents=True, exist_ok=True)
+    for directory in [
+        paths.pending, paths.active, paths.review, paths.failed,
+        paths.completed, paths.blocked, paths.logs
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
 
-    if args.self_test:
-        assert config["allow_merge"] is False
-        assert config["allow_production_deploy"] is False
-        assert (root / "agents" / "ak-bermet" / "SYSTEM_INSTRUCTIONS.md").exists()
-        print("AI PROF orchestrator self-test: PASS")
-        return 0
+    with paths.lock.open("w", encoding="utf-8") as lock_handle:
+        try:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("ORCHESTRATOR_ALREADY_RUNNING", file=sys.stderr)
+            return 2
 
-    task = next_task(paths)
-    if task is None:
-        print("QUEUE_EMPTY")
-        return 0
-
-    active_task = move_task(task, paths.active)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_path = paths.logs / f"{active_task.stem}-{timestamp}.log"
-
-    try:
-        data, project = validate_task(active_task, config)
-        prompt = build_prompt(active_task, data, root)
-
-        if args.dry_run:
-            log_path.write_text(
-                "DRY_RUN_PASS\n"
-                f"task={active_task}\n"
-                f"project={project}\n"
-                f"base_branch={data['Base-Branch']}\n"
-                f"work_branch={data['Work-Branch']}\n",
-                encoding="utf-8",
-            )
-            move_task(active_task, paths.review)
-            print("DRY_RUN_PASS")
+        if args.self_test:
+            context = load_context(root, "agents/ak-bermet")
+            assert all(context.values())
+            assert redact("TOKEN=abc") == "[REDACTED]"
+            print("AI PROF orchestrator self-test: PASS")
             return 0
 
-        if not command_exists("claude"):
-            raise RuntimeError("BLOCKED_MISSING_CLAUDE")
-        if not command_exists("codex"):
-            raise RuntimeError("BLOCKED_MISSING_CODEX")
+        tasks = sorted(paths.pending.glob("*.md"))
+        if not tasks:
+            print("QUEUE_EMPTY")
+            return 0
 
-        claude = run(["claude", "-p", prompt], cwd=project, check=False)
-        log_path.write_text(
-            "CLAUDE_STDOUT\n" + claude.stdout +
-            "\nCLAUDE_STDERR\n" + claude.stderr,
-            encoding="utf-8",
-        )
+        task = tasks[0]
+        active_task = safe_move(task, paths.active)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        log_path = paths.logs / f"{active_task.stem}-{timestamp}.log"
 
-        if claude.returncode != 0:
-            raise RuntimeError(f"CLAUDE_FAILED_{claude.returncode}")
+        try:
+            data, task_text = parse_task(active_task)
+            project = Path(data["Project-Path"]).expanduser().resolve()
 
-        move_task(active_task, paths.review)
-        print("CLAUDE_COMPLETE_REVIEW_REQUIRED")
-        return 0
+            if not (project / ".git").is_dir():
+                raise RuntimeError(f"BLOCKED_PROJECT_NOT_FOUND: {project}")
+            if not git_clean(project):
+                raise RuntimeError(f"BLOCKED_DIRTY_PROJECT: {project}")
+            if not re.fullmatch(r"(feature|fix)/[A-Za-z0-9._/-]+", data["Work-Branch"]):
+                raise RuntimeError("BLOCKED_INVALID_WORK_BRANCH")
+            if data["Base-Branch"] not in {"main", "develop"}:
+                raise RuntimeError("BLOCKED_INVALID_BASE_BRANCH")
 
-    except Exception as exc:
-        destination = paths.blocked if "BLOCKED_" in str(exc) or "not found" in str(exc) else paths.failed
-        if active_task.exists():
-            move_task(active_task, destination)
-        with log_path.open("a", encoding="utf-8") as fh:
-            fh.write(f"\nERROR\n{type(exc).__name__}: {exc}\n")
-        print(f"ORCHESTRATOR_STOPPED: {exc}", file=sys.stderr)
-        return 1
+            validate_access(data)
+            context = load_context(root, data["Agent-Context"])
+
+            # Stage 01A intentionally performs no target-project write and launches no agent.
+            summary = "\n".join([
+                "STAGE_01A_VALIDATION_PASS",
+                f"task_id={data['Task-ID']}",
+                f"project={project}",
+                f"base_branch={data['Base-Branch']}",
+                f"work_branch={data['Work-Branch']}",
+                f"context_files={','.join(context.keys())}",
+                "target_project_modified=false",
+                "claude_launched=false",
+                "merge_capability=false",
+                "production_deploy_capability=false",
+            ])
+            log_path.write_text(redact(summary) + "\n", encoding="utf-8")
+            safe_move(active_task, paths.review)
+            print("STAGE_01A_VALIDATION_PASS")
+            return 0
+
+        except Exception as exc:
+            destination = paths.blocked if "BLOCKED_" in str(exc) else paths.failed
+            if active_task.exists():
+                safe_move(active_task, destination)
+            log_path.write_text(redact(f"ERROR\n{type(exc).__name__}: {exc}\n"), encoding="utf-8")
+            print(f"ORCHESTRATOR_STOPPED: {exc}", file=sys.stderr)
+            return 1
 
 
 if __name__ == "__main__":

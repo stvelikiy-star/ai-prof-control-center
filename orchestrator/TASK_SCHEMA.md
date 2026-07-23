@@ -1,6 +1,6 @@
-# AI PROF Task Schema
+# AI PROF Task Schema V2
 
-Каждая задача в `queue/pending/` должна быть Markdown-файлом и содержать:
+Обязательные поля:
 
 - `Task-ID:`
 - `Project-Path:`
@@ -12,6 +12,11 @@
 - `Out-of-Scope:`
 - `Pass-Criteria:`
 - `Required-Checks:`
+- `Required-Commands:`
+- `Required-Environment:`
 - `Owner-Approval-Required: yes|no`
 
-Оркестратор не выполняет merge и production deploy.
+Правила:
+- Work-Branch начинается только с `feature/` или `fix/`.
+- Этап 01A не запускает Claude, не изменяет целевой проект, не делает merge/push/deploy.
+- Он только валидирует задачу, доступы и контекст, затем безопасно перемещает её в `review`.
