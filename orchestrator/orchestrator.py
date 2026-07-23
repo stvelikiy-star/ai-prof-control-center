@@ -36,6 +36,15 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
 ]
 
+WORK_BRANCH_PATTERN = re.compile(r"(feature|fix)/[A-Za-z0-9._/-]+")
+
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
+
+
+class AtomicMoveUnavailable(RuntimeError):
+    """Raised when the kernel/libc does not support atomic no-replace rename."""
+
 
 @dataclass
 class Paths:
@@ -48,6 +57,26 @@ class Paths:
     blocked: Path
     logs: Path
     lock: Path
+
+
+def build_paths(root: Path) -> Paths:
+    paths = Paths(
+        root=root,
+        pending=root / "queue/pending",
+        active=root / "queue/active",
+        review=root / "queue/review",
+        failed=root / "queue/failed",
+        completed=root / "queue/completed",
+        blocked=root / "queue/blocked",
+        logs=root / "logs/orchestrator",
+        lock=root / "orchestrator/orchestrator.lock",
+    )
+    for directory in [
+        paths.pending, paths.active, paths.review, paths.failed,
+        paths.completed, paths.blocked, paths.logs,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
+    return paths
 
 
 def parse_task(path: Path) -> tuple[dict[str, str], str]:
@@ -77,45 +106,50 @@ def git_clean(project: Path) -> bool:
     return not result.stdout.strip()
 
 
+def is_valid_work_branch(value: str) -> bool:
+    return bool(WORK_BRANCH_PATTERN.fullmatch(value))
+
+
+def _get_renameat2():
+    libc = ctypes.CDLL(None, use_errno=True)
+    return getattr(libc, "renameat2", None)
+
+
 def safe_move(task: Path, target_dir: Path) -> Path:
-    # Atomically move a task without replacing an existing destination.
+    """Move a task using renameat2(RENAME_NOREPLACE) only.
+
+    There is no non-atomic fallback: if the kernel/libc does not expose
+    renameat2, this raises AtomicMoveUnavailable so the caller can stop
+    safely instead of risking a non-atomic move.
+    """
     target = target_dir / task.name
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
+    renameat2 = _get_renameat2()
+    if renameat2 is None:
+        raise AtomicMoveUnavailable("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE")
 
-    if renameat2 is not None:
-        at_fdcwd = -100
-        rename_noreplace = 1
-        result = renameat2(
-            at_fdcwd,
-            os.fsencode(task),
-            at_fdcwd,
-            os.fsencode(target),
-            rename_noreplace,
-        )
-        if result == 0:
-            return target
+    renameat2.restype = ctypes.c_int
+    renameat2.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+    ]
 
-        error = ctypes.get_errno()
-        if error == errno.EEXIST:
-            raise FileExistsError(f"Destination task already exists: {target}")
-        if error not in {errno.ENOSYS, errno.EINVAL}:
-            raise OSError(error, os.strerror(error), str(target))
+    result = renameat2(
+        AT_FDCWD,
+        os.fsencode(str(task)),
+        AT_FDCWD,
+        os.fsencode(str(target)),
+        RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return target
 
-    try:
-        os.link(task, target)
-    except FileExistsError:
-        raise FileExistsError(f"Destination task already exists: {target}") from None
-
-    try:
-        task.unlink()
-    except Exception:
-        target.unlink(missing_ok=True)
-        raise
-
-    return target
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(f"Destination task already exists: {target}")
+    if error in (errno.ENOSYS, errno.EINVAL):
+        raise AtomicMoveUnavailable("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE")
+    raise OSError(error, os.strerror(error), str(target))
 
 
 def split_csv(value: str) -> list[str]:
@@ -154,6 +188,96 @@ def validate_access(data: dict[str, str]) -> None:
         raise RuntimeError("BLOCKED_MISSING_ENVIRONMENT: " + ", ".join(missing_env))
 
 
+def acquire_lock(lock_path: Path):
+    """Acquire the orchestrator's exclusive non-blocking lock.
+
+    Raises BlockingIOError if another orchestrator instance already holds it.
+    """
+    handle = lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise
+    return handle
+
+
+def run_self_test(root: Path) -> int:
+    context = load_context(root, "agents/ak-bermet")
+    if not all(context.values()):
+        raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
+    if redact("TOKEN=abc") != "[REDACTED]":
+        raise RuntimeError("SELF_TEST_REDACTION_FAILED")
+    print("AI PROF orchestrator self-test: PASS")
+    return 0
+
+
+def process_one(paths: Paths) -> int:
+    tasks = sorted(paths.pending.glob("*.md"))
+    if not tasks:
+        print("QUEUE_EMPTY")
+        return 0
+
+    task = tasks[0]
+    try:
+        active_task = safe_move(task, paths.active)
+    except AtomicMoveUnavailable:
+        print("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE", file=sys.stderr)
+        return 3
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = paths.logs / f"{active_task.stem}-{timestamp}.log"
+
+    try:
+        data, task_text = parse_task(active_task)
+        project = Path(data["Project-Path"]).expanduser().resolve()
+
+        if not (project / ".git").is_dir():
+            raise RuntimeError(f"BLOCKED_PROJECT_NOT_FOUND: {project}")
+        if not git_clean(project):
+            raise RuntimeError(f"BLOCKED_DIRTY_PROJECT: {project}")
+        if not is_valid_work_branch(data["Work-Branch"]):
+            raise RuntimeError("BLOCKED_INVALID_WORK_BRANCH")
+        if data["Base-Branch"] not in {"main", "develop"}:
+            raise RuntimeError("BLOCKED_INVALID_BASE_BRANCH")
+
+        validate_access(data)
+        context = load_context(paths.root, data["Agent-Context"])
+
+        # Stage 01A intentionally performs no target-project write and launches no agent.
+        summary = "\n".join([
+            "STAGE_01A_VALIDATION_PASS",
+            f"task_id={data['Task-ID']}",
+            f"project={project}",
+            f"base_branch={data['Base-Branch']}",
+            f"work_branch={data['Work-Branch']}",
+            f"context_files={','.join(context.keys())}",
+            "target_project_modified=false",
+            "claude_launched=false",
+            "merge_capability=false",
+            "production_deploy_capability=false",
+        ])
+        log_path.write_text(redact(summary) + "\n", encoding="utf-8")
+        safe_move(active_task, paths.review)
+        print("STAGE_01A_VALIDATION_PASS")
+        return 0
+
+    except AtomicMoveUnavailable:
+        print("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE", file=sys.stderr)
+        return 3
+    except Exception as exc:
+        destination = paths.blocked if "BLOCKED_" in str(exc) else paths.failed
+        try:
+            if active_task.exists():
+                safe_move(active_task, destination)
+        except AtomicMoveUnavailable:
+            print("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE", file=sys.stderr)
+            return 3
+        log_path.write_text(redact(f"ERROR\n{type(exc).__name__}: {exc}\n"), encoding="utf-8")
+        print(f"ORCHESTRATOR_STOPPED: {exc}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
@@ -161,91 +285,18 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    paths = Paths(
-        root=root,
-        pending=root / "queue/pending",
-        active=root / "queue/active",
-        review=root / "queue/review",
-        failed=root / "queue/failed",
-        completed=root / "queue/completed",
-        blocked=root / "queue/blocked",
-        logs=root / "logs/orchestrator",
-        lock=root / "orchestrator/orchestrator.lock",
-    )
+    paths = build_paths(root)
 
-    for directory in [
-        paths.pending, paths.active, paths.review, paths.failed,
-        paths.completed, paths.blocked, paths.logs
-    ]:
-        directory.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_handle = acquire_lock(paths.lock)
+    except BlockingIOError:
+        print("ORCHESTRATOR_ALREADY_RUNNING", file=sys.stderr)
+        return 2
 
-    with paths.lock.open("w", encoding="utf-8") as lock_handle:
-        try:
-            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print("ORCHESTRATOR_ALREADY_RUNNING", file=sys.stderr)
-            return 2
-
+    with lock_handle:
         if args.self_test:
-            context = load_context(root, "agents/ak-bermet")
-            if not all(context.values()):
-                raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
-            if redact("TOKEN=abc") != "[REDACTED]":
-                raise RuntimeError("SELF_TEST_REDACTION_FAILED")
-            print("AI PROF orchestrator self-test: PASS")
-            return 0
-
-        tasks = sorted(paths.pending.glob("*.md"))
-        if not tasks:
-            print("QUEUE_EMPTY")
-            return 0
-
-        task = tasks[0]
-        active_task = safe_move(task, paths.active)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        log_path = paths.logs / f"{active_task.stem}-{timestamp}.log"
-
-        try:
-            data, task_text = parse_task(active_task)
-            project = Path(data["Project-Path"]).expanduser().resolve()
-
-            if not (project / ".git").is_dir():
-                raise RuntimeError(f"BLOCKED_PROJECT_NOT_FOUND: {project}")
-            if not git_clean(project):
-                raise RuntimeError(f"BLOCKED_DIRTY_PROJECT: {project}")
-            if not re.fullmatch(r"(feature|fix)/[A-Za-z0-9._/-]+", data["Work-Branch"]):
-                raise RuntimeError("BLOCKED_INVALID_WORK_BRANCH")
-            if data["Base-Branch"] not in {"main", "develop"}:
-                raise RuntimeError("BLOCKED_INVALID_BASE_BRANCH")
-
-            validate_access(data)
-            context = load_context(root, data["Agent-Context"])
-
-            # Stage 01A intentionally performs no target-project write and launches no agent.
-            summary = "\n".join([
-                "STAGE_01A_VALIDATION_PASS",
-                f"task_id={data['Task-ID']}",
-                f"project={project}",
-                f"base_branch={data['Base-Branch']}",
-                f"work_branch={data['Work-Branch']}",
-                f"context_files={','.join(context.keys())}",
-                "target_project_modified=false",
-                "claude_launched=false",
-                "merge_capability=false",
-                "production_deploy_capability=false",
-            ])
-            log_path.write_text(redact(summary) + "\n", encoding="utf-8")
-            safe_move(active_task, paths.review)
-            print("STAGE_01A_VALIDATION_PASS")
-            return 0
-
-        except Exception as exc:
-            destination = paths.blocked if "BLOCKED_" in str(exc) else paths.failed
-            if active_task.exists():
-                safe_move(active_task, destination)
-            log_path.write_text(redact(f"ERROR\n{type(exc).__name__}: {exc}\n"), encoding="utf-8")
-            print(f"ORCHESTRATOR_STOPPED: {exc}", file=sys.stderr)
-            return 1
+            return run_self_test(root)
+        return process_one(paths)
 
 
 if __name__ == "__main__":
