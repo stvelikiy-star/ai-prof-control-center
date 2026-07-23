@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "control_center": "/home/agent/projects/ai-prof-control-center",
+  "default_project": "/home/agent/projects/ak-bermet",
+  "default_base_branch": "develop",
+  "max_fix_cycles": 2,
+  "require_clean_worktree": true,
+  "require_codex_pass": true,
+  "allow_merge": false,
+  "allow_production_deploy": false
+}
