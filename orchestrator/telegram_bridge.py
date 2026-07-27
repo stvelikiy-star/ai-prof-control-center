@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,7 @@ class Command:
     project: str = ""
     title: str = ""
     instructions: str = ""
+    plain: bool = False
 
 
 def redact(value: object) -> str:
@@ -142,7 +144,7 @@ def parse_command(text: object) -> Command | None:
         return Command("invalid")
     parts = [part.strip() for part in payload.split("|")]
     if len(parts) == 1:
-        return Command("task", "ak-bermet", parts[0], parts[0])
+        return Command("task", "ak-bermet", parts[0], parts[0], True)
     if len(parts) == 3 and all(parts):
         return Command("task", parts[0], parts[1], parts[2])
     return Command("invalid")
@@ -171,39 +173,106 @@ def resolve_project(requested: str, projects: dict[str, dict]) -> tuple[str, dic
     return matches[0]
 
 
-def submit_arguments(command: Command, projects: dict[str, dict]) -> tuple[list[str], str]:
-    project_id, project = resolve_project(command.project, projects)
+def _scope_candidate(pattern: str) -> str:
+    return pattern[:-3] if pattern.endswith("/**") else pattern
+
+
+def select_scope(command: Command, project_id: str, project: dict) -> str:
+    """Choose one concrete path, exclusively from the project's allowlist."""
     allowed = project.get("allowed_scope")
+    if not isinstance(allowed, list) or not allowed or not all(
+        isinstance(pattern, str) and pattern for pattern in allowed
+    ):
+        raise BridgeError("project registry entry has no valid allowed scopes")
+
+    candidates = [(pattern, _scope_candidate(pattern)) for pattern in allowed]
+    if any(not candidate for _pattern, candidate in candidates):
+        raise BridgeError("project registry contains an unsafe scope")
+
+    text = f"{command.title} {command.instructions}".lower()
+    preferences: list[str] = []
+    if re.search(r"\b(readme|read me)\b", text):
+        preferences.append("README.md")
+    if re.search(r"\b(test|tests|testing|spec|specs)\b", text):
+        preferences.append("tests")
+    if re.search(r"\b(doc|docs|documentation|guide|manual)\b", text):
+        preferences.append("docs")
+    if command.plain and project_id == "ak-bermet-pilot":
+        # AK BERMET's application work lives under its configured ai-system root.
+        preferences.append("ai-system")
+
+    for preference in preferences:
+        for _pattern, candidate in candidates:
+            if candidate == preference:
+                return candidate
+    # Exact files are narrower than directory trees; registry order breaks ties.
+    return min(candidates, key=lambda item: (item[0].endswith("/**"), len(item[1])))[1]
+
+
+def make_work_branch(command: Command, project_id: str, project: dict) -> str:
     prefixes = project.get("work_prefixes")
-    if not isinstance(allowed, list) or not allowed or not isinstance(prefixes, list):
-        raise BridgeError("project registry entry is incomplete")
-    scope = allowed[0]
-    if scope.endswith("/**"):
-        raise BridgeError("project has no safe concrete default scope")
-    branch_prefix = "feature/" if "feature/" in prefixes else prefixes[0]
+    if not isinstance(prefixes, list):
+        raise BridgeError("project registry entry has no valid branch prefixes")
+    valid = [
+        prefix for prefix in prefixes
+        if isinstance(prefix, str) and re.fullmatch(r"(?:feature|fix)/", prefix)
+    ]
+    if not valid:
+        raise BridgeError("project registry entry has no safe branch prefix")
+    prefix = "feature/" if "feature/" in valid else valid[0]
     digest = hashlib.sha256(
         f"{project_id}\0{command.title}\0{command.instructions}".encode("utf-8")
-    ).hexdigest()[:12]
+    ).hexdigest()[:8]
+    return f"{prefix}telegram-{digest}-{secrets.token_hex(6)}"
+
+
+def submit_arguments(command: Command, projects: dict[str, dict]) -> tuple[list[str], str]:
+    project_id, project = resolve_project(command.project, projects)
+    scope = select_scope(command, project_id, project)
+    work_branch = make_work_branch(command, project_id, project)
     args = [
-        sys.executable, str(SUBMIT_TASK), "--root", str(ROOT), "--json", "create",
+        sys.executable, str(SUBMIT_TASK),
+        "--root", str(ROOT),
+        "--state-root", str(STATE_DIR),
+        "--json", "create",
         "--project", project_id, "--title", command.title,
         "--instructions", command.instructions,
-        "--work-branch", f"{branch_prefix}telegram-{digest}",
+        "--work-branch", work_branch,
         "--scope", scope,
     ]
     return args, project_id
+
+
+def rejection_reason(
+    result: subprocess.CompletedProcess[str], command: Command | None = None,
+) -> str:
+    reason = ""
+    try:
+        payload = json.loads(result.stdout)
+        if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+            reason = payload["error"]
+    except (TypeError, ValueError):
+        pass
+    if not reason:
+        reason = "task intake rejected the request"
+    reason = redact(reason).replace("\r", " ").replace("\n", " ").strip()
+    if command is not None:
+        for supplied_text in (command.instructions, command.title):
+            if supplied_text:
+                reason = reason.replace(supplied_text, "[request text]")
+    return reason[:197] + "..." if len(reason) > 200 else reason
 
 
 def submit(command: Command, projects: dict[str, dict]) -> tuple[str, str]:
     args, project_id = submit_arguments(command, projects)
     try:
         result = subprocess.run(
-            args, text=True, capture_output=True, timeout=30, shell=False,
+            args, cwd=ROOT, text=True, capture_output=True, timeout=30, shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BridgeError("task intake is unavailable") from exc
     if result.returncode != 0:
-        raise BridgeError("task intake rejected the request")
+        raise BridgeError(rejection_reason(result, command))
     try:
         payload = json.loads(result.stdout)
         task_id = payload["task_id"]
