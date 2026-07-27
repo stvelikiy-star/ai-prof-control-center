@@ -605,6 +605,27 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertNotIn("/home/agent", clean)
         self.assertIn("[REDACTED]", clean)
 
+    def test_sandbox_setup_failure_returns_sanitized_real_stderr(self):
+        with tempfile.TemporaryDirectory() as cc_tmp, tempfile.TemporaryDirectory() as proj_tmp:
+            cc_root = Path(cc_tmp)
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            self.make_context(cc_root)
+            paths = cr.build_claude_paths(cc_root)
+            self.make_task(paths.review / "task.md", **{"Project-Path": str(project)})
+            failure = cr.SandboxSetupError(
+                "BLOCKED_SANDBOX_SETUP: bubblewrap failed to establish the sandbox: "
+                "bwrap: creating new namespace failed: Operation not permitted"
+            )
+            with mock.patch.object(cr.shutil, "which", side_effect=self.fake_which), \
+                 mock.patch.object(cr, "invoke_claude", side_effect=failure), \
+                 mock.patch("sys.stderr") as stderr:
+                result = cr.process_one(paths)
+            self.assertEqual(result, 1)
+            emitted = "".join(call.args[0] for call in stderr.write.call_args_list if call.args)
+            self.assertIn("bwrap: creating new namespace failed", emitted)
+            self.assertNotEqual(emitted.strip(), "BLOCKED_SANDBOX_SETUP")
+
     # =========================================================================
     # Blocker 3: isolated workspace and approved-scope enforcement.
     # =========================================================================
