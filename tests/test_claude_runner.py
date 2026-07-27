@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -90,9 +91,35 @@ class ClaudeRunnerTests(unittest.TestCase):
         )
 
     def fake_which(self, cmd):
+        # sys.executable is guaranteed to exist and be executable on this
+        # machine, so check_claude_available()'s real stat()/X_OK checks
+        # succeed the same way they would for a real installed Claude CLI.
         if cmd == cr.CLAUDE_CLI:
-            return "/usr/bin/claude"
+            return sys.executable
         return _REAL_WHICH(cmd)
+
+    def require_working_bwrap(self):
+        probe = subprocess.run(
+            [
+                cr.BWRAP_CLI, "--unshare-all", "--share-net",
+                "--die-with-parent", "--new-session", "--ro-bind", "/", "/",
+                "--", "/bin/true",
+            ],
+            text=True, capture_output=True,
+        )
+        if probe.returncode != 0:
+            self.skipTest(f"Bubblewrap unavailable on this host: {probe.stderr.strip()}")
+
+    def run_fake_in_bwrap(self, script: str, workspace: Path, scratch: Path):
+        self.require_working_bwrap()
+        fake = scratch.parent / "fake-claude"
+        fake.write_text("#!/usr/bin/python3\n" + script, encoding="utf-8")
+        fake.chmod(0o755)
+        argv = cr.build_bwrap_argv(
+            Path(cr.BWRAP_CLI), fake, workspace, scratch,
+            [str(fake)], home_dir=scratch.parent / "empty-home", auth_env=[],
+        )
+        return subprocess.run(argv, text=True, capture_output=True, timeout=15)
 
     # -- queue movement ------------------------------------------------------
 
@@ -449,8 +476,22 @@ class ClaudeRunnerTests(unittest.TestCase):
                 cr.invoke_claude("bundle", workspace, mcp_config)
                 run_mock.assert_called_once()
                 called_argv = run_mock.call_args.args[0]
+                self.assertEqual(called_argv[0], cr.BWRAP_CLI)
+                self.assertIn("--die-with-parent", called_argv)
+                self.assertIn("--unshare-all", called_argv)
+                self.assertIn("--share-net", called_argv)
+                self.assertIn("--clearenv", called_argv)
+                self.assertIn("--new-session", called_argv)
+                bind_index = called_argv.index("--bind")
+                self.assertEqual(called_argv[bind_index + 1], str(workspace.resolve()))
+                self.assertEqual(called_argv[bind_index + 2], cr.SANDBOX_WORKSPACE)
+                chdir_index = called_argv.index("--chdir")
+                self.assertEqual(called_argv[chdir_index + 1], cr.SANDBOX_WORKSPACE)
+                self.assertIn(sys.executable, called_argv)
+                self.assertNotIn(str(workspace.resolve()), called_argv[chdir_index + 1:])
+                self.assertNotIn(str(Path.home()), called_argv)
                 self.assertNotIn("--dangerously-skip-permissions", called_argv)
-                self.assertEqual(run_mock.call_args.kwargs["cwd"], str(workspace))
+                self.assertNotIn("cwd", run_mock.call_args.kwargs)
 
     # =========================================================================
     # Blocker 3: isolated workspace and approved-scope enforcement.
@@ -538,7 +579,7 @@ class ClaudeRunnerTests(unittest.TestCase):
             changes = cr.compute_workspace_diff(workspace, before)
             cr.validate_workspace_changes(changes, entries)
             change_set = cr.build_change_set(workspace, changes)
-            applied = cr.apply_validated_changes(project, change_set)
+            applied = cr.apply_validated_changes(project, change_set, entries)
 
             self.assertEqual(applied, ["modified:tracked.txt"])
             self.assertEqual((project / "tracked.txt").read_text(encoding="utf-8"), "updated by claude\n")
@@ -798,6 +839,283 @@ class ClaudeRunnerTests(unittest.TestCase):
             ):
                 with self.assertRaises(cr.GitAccessError):
                     cr.current_branch(project)
+
+    def test_raw_absolute_windows_unc_backslash_and_traversal_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory() as proj_tmp:
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            for raw in (
+                "/etc/passwd", "C:\\Windows\\win.ini", "\\\\server\\share",
+                "dir\\file.txt", "../outside", "dir/../outside", "./tracked.txt",
+            ):
+                with self.subTest(raw=raw), self.assertRaises(cr.ScopeAccessError):
+                    cr.resolve_scope_entries(project, [raw])
+
+    def test_parent_and_final_component_symlinks_are_rejected(self):
+        with tempfile.TemporaryDirectory() as proj_tmp:
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            real_dir = project / "real"
+            real_dir.mkdir()
+            (real_dir / "file.txt").write_text("x", encoding="utf-8")
+            (project / "parent-link").symlink_to(real_dir, target_is_directory=True)
+            (project / "file-link").symlink_to(real_dir / "file.txt")
+            for raw in ("parent-link/file.txt", "file-link"):
+                with self.subTest(raw=raw), self.assertRaises(cr.ScopeAccessError):
+                    cr.resolve_scope_entries(project, [raw])
+
+    def test_workspace_unexpected_files_symlinks_and_special_files_are_rejected(self):
+        with tempfile.TemporaryDirectory() as proj_tmp, tempfile.TemporaryDirectory() as ws_tmp:
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            entries = cr.resolve_scope_entries(project, ["tracked.txt"])
+            workspace = Path(ws_tmp)
+            cr.build_isolated_workspace(workspace, project, entries)
+            (workspace / "unexpected.txt").write_text("no", encoding="utf-8")
+            with self.assertRaises(cr.ScopeAccessError):
+                cr.audit_workspace_integrity(workspace, entries)
+            (workspace / "unexpected.txt").unlink()
+            (workspace / "tracked-link").symlink_to("tracked.txt")
+            with self.assertRaises(cr.ScopeAccessError):
+                cr.audit_workspace_integrity(workspace, entries)
+            (workspace / "tracked-link").unlink()
+            fifo = workspace / "tracked.fifo"
+            os.mkfifo(fifo)
+            with self.assertRaises(cr.ScopeAccessError):
+                cr.audit_workspace_integrity(workspace, entries)
+
+    def test_apply_revalidates_destination_and_rolls_back_entire_batch(self):
+        with tempfile.TemporaryDirectory() as proj_tmp:
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            (project / "second.txt").write_text("second-base\n", encoding="utf-8")
+            entries = cr.resolve_scope_entries(project, ["tracked.txt", "second.txt"])
+            change_set = [
+                ("tracked.txt", "modified", b"first-new\n"),
+                ("second.txt", "modified", b"second-new\n"),
+            ]
+            real_write = cr._write_atomic
+            calls = 0
+
+            def fail_second(directory, filename, content):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise cr.PatchAccessError("simulated atomic apply failure")
+                return real_write(directory, filename, content)
+
+            with mock.patch.object(cr, "_write_atomic", side_effect=fail_second):
+                with self.assertRaises(cr.PatchAccessError):
+                    cr.apply_validated_changes(project, change_set, entries)
+            self.assertEqual((project / "tracked.txt").read_text(), "base\n")
+            self.assertEqual((project / "second.txt").read_text(), "second-base\n")
+
+            outside = project.parent / "outside.txt"
+            outside.write_text("outside\n")
+            (project / "tracked.txt").unlink()
+            (project / "tracked.txt").symlink_to(outside)
+            with self.assertRaises(cr.ScopeAccessError):
+                cr.apply_validated_changes(project, [change_set[0]], entries)
+            self.assertEqual(outside.read_text(), "outside\n")
+
+    def test_context_only_content_is_never_copied_back(self):
+        with tempfile.TemporaryDirectory() as proj_tmp, tempfile.TemporaryDirectory() as ws_tmp:
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            entries = cr.resolve_scope_entries(project, ["tracked.txt"])
+            workspace = Path(ws_tmp)
+            before = cr.build_isolated_workspace(workspace, project, entries)
+            (workspace / "tracked.txt").write_text("approved\n")
+            changes = cr.compute_workspace_diff(workspace, before)
+            cr.apply_validated_changes(
+                project, cr.build_change_set(workspace, changes), entries,
+            )
+            self.assertEqual((project / "tracked.txt").read_text(), "approved\n")
+            self.assertFalse((project / "SYSTEM_INSTRUCTIONS.md").exists())
+            self.assertEqual((project / "secret.txt").read_text(), "outside-scope-secret\n")
+
+    def test_missing_and_non_executable_bwrap_and_claude_are_blocked(self):
+        missing = Path("/definitely/missing/ai-prof-bwrap")
+        with mock.patch.object(cr, "BWRAP_CLI", str(missing)):
+            with self.assertRaises(cr.SandboxCliMissingError):
+                cr.check_bwrap_available()
+        with tempfile.TemporaryDirectory() as tmp:
+            nonexec = Path(tmp) / "tool"
+            nonexec.write_text("#!/bin/sh\n")
+            nonexec.chmod(0o600)
+            with mock.patch.object(cr, "BWRAP_CLI", str(nonexec)):
+                with self.assertRaises(cr.SandboxNotExecutableError):
+                    cr.check_bwrap_available()
+            with mock.patch.object(cr.shutil, "which", return_value=None):
+                with self.assertRaises(cr.ClaudeCliMissingError):
+                    cr.check_claude_available()
+            with mock.patch.object(cr.shutil, "which", return_value=str(nonexec)):
+                with self.assertRaises(cr.ClaudeNotExecutableError):
+                    cr.check_claude_available()
+
+    def test_project_overlapping_runtime_or_credential_mount_is_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runtime = Path(tmp) / "runtime"
+            fake_runtime.mkdir()
+            project = fake_runtime / "project"
+            project.mkdir()
+            with mock.patch.object(cr, "RUNTIME_READONLY_DIRS", [str(fake_runtime)]):
+                with self.assertRaises(cr.SandboxExposureError):
+                    cr.validate_project_not_exposed(project, Path(tmp) / "home")
+
+    def test_launch_permission_oserror_and_timeout_are_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            config = cr.build_claude_mcp_config(scratch)
+            for raised, expected in (
+                (PermissionError("denied"), cr.PermissionAccessError),
+                (OSError("launch failed"), cr.ProcessLaunchError),
+                (subprocess.TimeoutExpired(["bwrap"], 1), cr.InfrastructureTimeoutError),
+            ):
+                with self.subTest(expected=expected.__name__), \
+                     mock.patch.object(cr.shutil, "which", side_effect=self.fake_which), \
+                     mock.patch.object(cr.subprocess, "run", side_effect=raised):
+                    with self.assertRaises(expected):
+                        cr.invoke_claude("bundle", workspace, config)
+
+    def test_temp_directory_auth_permission_git_and_apply_failures_route_blocked(self):
+        blocked_types = (
+            cr.TempDirectoryError, cr.ClaudeAuthError, cr.ClaudePermissionError,
+            cr.GitAccessError, cr.PatchAccessError, cr.InfrastructureTimeoutError,
+        )
+        for failure in blocked_types:
+            with self.subTest(failure=failure.__name__):
+                self.assertEqual(cr.classify_failure(failure("x"))[0], "blocked")
+        self.assertTrue(cr.is_claude_auth_failure("401 authentication failed"))
+        self.assertTrue(cr.is_claude_permission_failure("403 account does not have access"))
+
+    def test_temporary_directory_failure_moves_to_blocked_without_project_changes(self):
+        with tempfile.TemporaryDirectory() as cc_tmp, tempfile.TemporaryDirectory() as proj_tmp:
+            cc_root = Path(cc_tmp)
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            self.make_context(cc_root)
+            paths = cr.build_claude_paths(cc_root)
+            self.make_task(paths.review / "task.md", **{"Project-Path": str(project)})
+            before = snapshot_git_state(project)
+            with mock.patch.object(cr.shutil, "which", side_effect=self.fake_which), \
+                 mock.patch.object(cr.tempfile, "TemporaryDirectory", side_effect=OSError("no temp access")):
+                result = cr.process_one(paths)
+            self.assertEqual(result, 1)
+            self.assertTrue((paths.blocked / "task.md").exists())
+            self.assertEqual(snapshot_git_state(project), before)
+            log_text = list(paths.logs.glob("*.log"))[-1].read_text()
+            self.assertIn("BLOCKED_TEMP_DIRECTORY", log_text)
+
+    def test_atomic_apply_failure_moves_to_blocked_and_restores_all_files(self):
+        with tempfile.TemporaryDirectory() as cc_tmp, tempfile.TemporaryDirectory() as proj_tmp:
+            cc_root = Path(cc_tmp)
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            (project / "second.txt").write_text("second-base\n")
+            run_git(project, "add", "second.txt")
+            run_git(project, "commit", "-m", "add second")
+            self.make_context(cc_root)
+            paths = cr.build_claude_paths(cc_root)
+            self.make_task(
+                paths.review / "task.md",
+                **{"Project-Path": str(project), "Scope-Files": "tracked.txt, second.txt"},
+            )
+
+            def fake_invoke(_bundle, workspace, _config):
+                (workspace / "tracked.txt").write_text("first-new\n")
+                (workspace / "second.txt").write_text("second-new\n")
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            real_write = cr._write_atomic
+            calls = 0
+
+            def fail_second(directory, filename, content):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise cr.PatchAccessError("simulated apply failure")
+                return real_write(directory, filename, content)
+
+            with mock.patch.object(cr.shutil, "which", side_effect=self.fake_which), \
+                 mock.patch.object(cr, "invoke_claude", side_effect=fake_invoke), \
+                 mock.patch.object(cr, "_write_atomic", side_effect=fail_second):
+                result = cr.process_one(paths)
+            self.assertEqual(result, 1)
+            self.assertTrue((paths.blocked / "task.md").exists())
+            self.assertEqual((project / "tracked.txt").read_text(), "base\n")
+            self.assertEqual((project / "second.txt").read_text(), "second-base\n")
+            log_text = list(paths.logs.glob("*.log"))[-1].read_text()
+            self.assertIn("BLOCKED_PATCH_ACCESS", log_text)
+
+    def test_blocked_failed_and_pending_codex_remain_distinct(self):
+        self.assertEqual(cr.classify_failure(cr.AccessFailure("x"))[0], "blocked")
+        self.assertEqual(cr.classify_failure(cr.ClaudeExecutionError("x"))[0], "failed")
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = cr.build_claude_paths(Path(tmp))
+            self.assertNotEqual(paths.blocked, paths.failed)
+            self.assertNotEqual(paths.blocked, paths.pending_codex)
+            self.assertNotEqual(paths.failed, paths.pending_codex)
+
+    def test_real_bwrap_allows_workspace_execution_and_blocks_host_reads_and_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            host_secret = root / "host-secret"
+            host_secret.write_text("secret")
+            outside = root / "outside-write"
+            script = (
+                "from pathlib import Path\n"
+                "Path('allowed.txt').write_text('ok')\n"
+                f"assert not Path({str(host_secret)!r}).exists()\n"
+                f"assert not Path({str(outside)!r}).parent.exists()\n"
+                f"Path({str(outside)!r}).write_text('bad')\n"
+            )
+            result = self.run_fake_in_bwrap(script, workspace, scratch)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((workspace / "allowed.txt").read_text(), "ok")
+            self.assertFalse(outside.exists())
+
+    def test_real_bwrap_allowed_execution_succeeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            result = self.run_fake_in_bwrap(
+                "from pathlib import Path\nPath('result.txt').write_text('success')\n",
+                workspace, scratch,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((workspace / "result.txt").read_text(), "success")
+
+    def test_real_bwrap_cannot_access_another_project_or_redirect_workspace_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            other = root / "other-project"
+            workspace.mkdir()
+            scratch.mkdir()
+            other.mkdir()
+            (other / "secret").write_text("other-secret")
+            (workspace / "redirect").symlink_to(other, target_is_directory=True)
+            script = (
+                "from pathlib import Path\n"
+                f"assert not Path({str(other)!r}).exists()\n"
+                "Path('redirect/escaped').write_text('bad')\n"
+            )
+            result = self.run_fake_in_bwrap(script, workspace, scratch)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((other / "escaped").exists())
 
     def test_classify_failure_uses_exception_classes(self):
         self.assertEqual(cr.classify_failure(cr.ClaudeCliMissingError("x")), ("blocked", "BLOCKED_CLI_MISSING"))
