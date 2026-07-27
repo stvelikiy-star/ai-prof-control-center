@@ -69,25 +69,48 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertEqual(projects["ak-bermet"]["code_toolchain"], "nvm-node")
 
     def test_ak_bermet_task_metadata_declares_node_toolchain_and_checks(self):
-        project = {
-            "path": "/home/agent/projects/ak-bermet",
-            "base_branch": "develop",
-            "agent_context": "agents/ak-bermet",
-            "code_required_commands": ["git", "python3", "node", "npm", "npx"],
-            "code_required_checks": [
-                "npm run lint", "npx tsc --noEmit", "npm test", "npm run build",
-            ],
-        }
+        root = MODULE_PATH.parents[1]
+        registry = json.loads(
+            (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
+        )
+        project = next(
+            item for item in registry["projects"] if item["project_id"] == "ak-bermet"
+        )
         text = submit.render_task(
-            project, "AK_BERMET_TEST", "Fix", "Fix safely",
-            "fix/test", ["src"],
+            project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
         )
         self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
         self.assertIn(
-            "Required-Checks: npm run lint, npx tsc --noEmit, npm test, npm run build",
+            "Required-Checks: npm run lint, npx tsc --noEmit, "
+            "node --test --experimental-strip-types "
+            "src/lib/inspection-rules.test.ts, npm run build",
             text,
         )
+        self.assertNotIn("npm test", text)
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
+
+    def test_task_generation_rejects_configured_missing_npm_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp)
+            (project_path / "package.json").write_text(
+                json.dumps({"scripts": {"lint": "eslint ."}}), encoding="utf-8",
+            )
+            project = {
+                "project_id": "broken-project",
+                "path": str(project_path),
+                "base_branch": "develop",
+                "agent_context": "agents/pilot",
+                "code_required_checks": ["npm run lint", "npm run missing"],
+            }
+            with self.assertRaisesRegex(
+                submit.IntakeError,
+                r"project configuration error for broken-project: "
+                r"code_required_checks references missing npm script: missing",
+            ):
+                submit.render_task(
+                    project, "BROKEN_TEST", "Fix", "Fix safely",
+                    "fix/test", ["README.md"],
+                )
 
     def make_root(self, parent: Path) -> tuple[Path, Path]:
         root = parent / "control"

@@ -26,6 +26,7 @@ SCOPE_ENTRY_LIMIT = 240
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,79}$")
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 WORK_BRANCH_RE = re.compile(r"^(feature|fix)/[A-Za-z0-9._/-]+$")
+NPM_RUN_CHECK_RE = re.compile(r"^npm run ([^\s]+)$")
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 QUEUE_NAMES = (
     "pending", "active", "review", "pending_codex", "approved",
@@ -176,6 +177,35 @@ def make_task_id(project_id: str) -> str:
     return f"{project_id.upper().replace('-', '_')}_{timestamp}_{secrets.token_hex(3).upper()}"
 
 
+def validate_npm_run_checks(project: dict, required_checks: list[str]) -> None:
+    scripts = [
+        match.group(1)
+        for check in required_checks
+        if (match := NPM_RUN_CHECK_RE.fullmatch(check))
+    ]
+    if not scripts:
+        return
+
+    project_id = project.get("project_id", "<unknown>")
+    package_path = Path(project["path"]) / "package.json"
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise IntakeError(
+            f"project configuration error for {project_id}: cannot read package.json "
+            f"for npm run checks: {exc}"
+        ) from exc
+    package_scripts = package.get("scripts")
+    if not isinstance(package_scripts, dict):
+        package_scripts = {}
+    for script in scripts:
+        if script not in package_scripts:
+            raise IntakeError(
+                f"project configuration error for {project_id}: "
+                f"code_required_checks references missing npm script: {script}"
+            )
+
+
 def render_task(
     project: dict, task_id: str, title: str, instructions: str,
     work_branch: str, scope: list[str], execution_mode: str = "code",
@@ -194,6 +224,8 @@ def render_task(
     if execution_mode != "code":
         required_commands = ["git", "python3"]
         required_checks = []
+    else:
+        validate_npm_run_checks(project, required_checks)
     values = [
         ("Task-ID", task_id),
         ("Execution-Mode", execution_mode),
