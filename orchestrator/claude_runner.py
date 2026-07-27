@@ -389,6 +389,71 @@ def current_branch(project: Path) -> str:
     return result.stdout.strip()
 
 
+_CODEX_REVIEW_ATTEMPT_RE = re.compile(
+    r"(?mi)^[ \t]*Codex-Review-Attempt:[ \t]*(\S+)[ \t]*$"
+)
+
+
+def codex_review_attempt(task_text: str) -> int:
+    """Return the bounded audit retry number embedded by Stage 01C."""
+    match = _CODEX_REVIEW_ATTEMPT_RE.search(task_text)
+    if not match:
+        return 0
+    if not match.group(1).isdigit():
+        raise InvalidBranchNameError(
+            "BLOCKED_INVALID_BRANCH: malformed Codex-Review-Attempt"
+        )
+    return int(match.group(1))
+
+
+def validate_review_worktree(project: Path, work_branch: str, scope_entries: list) -> None:
+    """Allow an audit retry only on its exact work branch and inside scope."""
+    if current_branch(project) != work_branch:
+        raise BranchAccessError(
+            f"BLOCKED_BRANCH_ACCESS: audit retry requires branch {work_branch!r}"
+        )
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z"],
+            cwd=str(project), capture_output=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise GitAccessError(f"BLOCKED_GIT_ACCESS: unable to inspect retry changes: {exc}") from exc
+
+    records = result.stdout.split(b"\0")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        if len(record) < 4:
+            raise ScopeAccessError("BLOCKED_SCOPE_ACCESS: malformed Git status record")
+        status = record[:2]
+        raw_path = record[3:]
+        if b"\0" in raw_path:
+            raise ScopeAccessError("BLOCKED_SCOPE_ACCESS: invalid status path")
+        try:
+            relative = raw_path.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ScopeAccessError("BLOCKED_SCOPE_ACCESS: non-UTF-8 status path") from exc
+        if status[:1] in {b"R", b"C"} or status[1:2] in {b"R", b"C"}:
+            if index >= len(records) or not records[index]:
+                raise ScopeAccessError("BLOCKED_SCOPE_ACCESS: malformed rename status")
+            relative = records[index].decode("utf-8")
+            index += 1
+        candidate = PurePosixPath(relative)
+        allowed = any(
+            candidate == PurePosixPath(entry.relative)
+            or (entry.is_dir and PurePosixPath(entry.relative) in candidate.parents)
+            for entry in scope_entries
+        )
+        if not allowed:
+            raise ScopeAccessError(
+                f"BLOCKED_SCOPE_ACCESS: audit retry change outside approved scope: {relative}"
+            )
+
+
 def branch_exists(project: Path, branch: str) -> bool:
     try:
         result = subprocess.run(
@@ -1361,13 +1426,6 @@ def process_one(paths: ClaudePaths) -> int:
         except RuntimeError as exc:
             raise EnvironmentAccessError(f"BLOCKED_ENVIRONMENT_ACCESS: {exc}") from exc
 
-        try:
-            clean = orch.git_clean(project)
-        except (subprocess.CalledProcessError, OSError) as exc:
-            raise GitAccessError(f"BLOCKED_GIT_ACCESS: unable to read project status: {exc}") from exc
-        if not clean:
-            raise DirtyProjectError(f"BLOCKED_DIRTY_PROJECT: {project}")
-
         if not orch.is_valid_work_branch(data["Work-Branch"]):
             raise InvalidBranchNameError("BLOCKED_INVALID_BRANCH: invalid work branch")
         if data["Base-Branch"] not in {"main", "develop"}:
@@ -1380,6 +1438,16 @@ def process_one(paths: ClaudePaths) -> int:
         validate_project_not_exposed(project)
 
         scope_entries = resolve_scope_entries(project, parse_scope_files(task_text))
+        review_attempt = codex_review_attempt(task_text)
+        if review_attempt:
+            validate_review_worktree(project, data["Work-Branch"], scope_entries)
+        else:
+            try:
+                clean = orch.git_clean(project)
+            except (subprocess.CalledProcessError, OSError) as exc:
+                raise GitAccessError(f"BLOCKED_GIT_ACCESS: unable to read project status: {exc}") from exc
+            if not clean:
+                raise DirtyProjectError(f"BLOCKED_DIRTY_PROJECT: {project}")
         source_baseline = snapshot_scope_sources(project, scope_entries)
 
         # From here on the real project is READ-ONLY until Claude succeeds and
@@ -1423,7 +1491,8 @@ def process_one(paths: ClaudePaths) -> int:
         # touched: first re-confirm nothing changed underneath us, then
         # prepare the target branch and apply the validated change set.
         verify_scope_sources_unchanged(project, scope_entries, source_baseline)
-        ensure_work_branch(project, data["Base-Branch"], data["Work-Branch"])
+        if not review_attempt:
+            ensure_work_branch(project, data["Base-Branch"], data["Work-Branch"])
         applied_changes = apply_validated_changes(project, change_set, scope_entries)
 
         executed_checks = run_allowed_checks(
@@ -1439,6 +1508,7 @@ def process_one(paths: ClaudePaths) -> int:
             f"context_files={','.join(context.keys())}",
             f"scope_files={','.join(entry.relative for entry in scope_entries)}",
             f"applied_changes={','.join(applied_changes) if applied_changes else 'none'}",
+            f"codex_review_attempt={review_attempt}",
             f"checks_executed={','.join(executed_checks) if executed_checks else 'none'}",
             "sandbox=bubblewrap",
             "codex_launched=false",

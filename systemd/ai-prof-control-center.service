@@ -1,0 +1,20 @@
+[Unit]
+Description=AI PROF Control Center autonomous intake loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/control_loop.py --daemon
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/agent/projects/ai-prof-control-center /home/agent/projects/ai-prof-pilot-sandbox
+UMask=0077
+
+[Install]
+WantedBy=default.target

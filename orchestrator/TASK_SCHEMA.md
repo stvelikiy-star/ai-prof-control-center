@@ -33,3 +33,17 @@
 - Не делает merge/push/deploy и не запускает Codex.
 - PASS → `queue/pending_codex`; ошибка Claude → `queue/failed`; отсутствие доступа
   или невалидная ветка → `queue/blocked`.
+
+## Этап 01C (Codex audit)
+
+- Обрабатывает только `queue/pending_codex` в read-only sandbox.
+- Принимает только точный первый непустой ответ `# PASS` или `# FAIL`.
+- Проверяет неизменность Git и всего рабочего дерева до и после аудита.
+- PASS → `queue/approved`; FAIL → `queue/review` с ограниченным счётчиком;
+  ошибка инфраструктуры или протокола → `queue/blocked`.
+
+## Production intake
+
+`submit_task.py` создаёт тот же Task Schema V2 атомарно в `queue/pending`.
+Реестр `projects.json` ограничивает проект, базовую/рабочую ветку и
+`Scope-Files`; commit, push, merge и deployment запрещены.

@@ -212,6 +212,55 @@ class ClaudeRunnerTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertTrue((paths.blocked / "task.md").exists())
 
+    def test_codex_retry_accepts_only_scoped_dirty_work_branch(self):
+        with tempfile.TemporaryDirectory() as cc_tmp, tempfile.TemporaryDirectory() as proj_tmp:
+            cc_root = Path(cc_tmp)
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            subprocess.run(["git", "checkout", "-qb", "feature/test"], cwd=project, check=True)
+            (project / "tracked.txt").write_text("first attempt\n", encoding="utf-8")
+            self.make_context(cc_root)
+            paths = cr.build_claude_paths(cc_root)
+            task_path = paths.review / "task.md"
+            self.make_task(task_path, **{"Project-Path": str(project)})
+            task_path.write_text(
+                task_path.read_text(encoding="utf-8") + "Codex-Review-Attempt: 1\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(cr.shutil, "which", side_effect=self.fake_which), \
+                 mock.patch.object(
+                     cr, "invoke_claude",
+                     return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+                 ):
+                result = cr.process_one(paths)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(run_git(project, "branch", "--show-current").strip(), "feature/test")
+            self.assertTrue((paths.pending_codex / "task.md").exists())
+
+    def test_codex_retry_rejects_outside_scope_dirty_file(self):
+        with tempfile.TemporaryDirectory() as cc_tmp, tempfile.TemporaryDirectory() as proj_tmp:
+            cc_root = Path(cc_tmp)
+            project = Path(proj_tmp) / "project"
+            init_git_project(project)
+            subprocess.run(["git", "checkout", "-qb", "feature/test"], cwd=project, check=True)
+            (project / "secret.txt").write_text("outside retry\n", encoding="utf-8")
+            self.make_context(cc_root)
+            paths = cr.build_claude_paths(cc_root)
+            task_path = paths.review / "task.md"
+            self.make_task(task_path, **{"Project-Path": str(project)})
+            task_path.write_text(
+                task_path.read_text(encoding="utf-8") + "Codex-Review-Attempt: 1\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(cr.shutil, "which", side_effect=self.fake_which):
+                result = cr.process_one(paths)
+
+            self.assertEqual(result, 1)
+            self.assertTrue((paths.blocked / "task.md").exists())
+
     # -- missing Claude CLI ------------------------------------------------------
 
     def test_missing_claude_cli_moves_to_blocked(self):
