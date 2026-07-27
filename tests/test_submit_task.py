@@ -81,7 +81,7 @@ class SubmitTaskTests(unittest.TestCase):
         )
         self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
         self.assertIn(
-            "Required-Checks: npm run lint, npx tsc --noEmit, "
+            "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
             "node --test --experimental-strip-types "
             "src/lib/inspection-rules.test.ts, npm run build",
             text,
