@@ -116,8 +116,8 @@ class ClaudeRunnerTests(unittest.TestCase):
         fake.write_text("#!/usr/bin/python3\n" + script, encoding="utf-8")
         fake.chmod(0o755)
         argv = cr.build_bwrap_argv(
-            Path(cr.BWRAP_CLI), fake, workspace, scratch,
-            [str(fake)], home_dir=scratch.parent / "empty-home", auth_env=[],
+            Path(cr.BWRAP_CLI), workspace, scratch, [cr.SANDBOX_CLAUDE],
+            readonly_binds=[(fake, cr.SANDBOX_CLAUDE)],
         )
         return subprocess.run(argv, text=True, capture_output=True, timeout=15)
 
@@ -531,12 +531,23 @@ class ClaudeRunnerTests(unittest.TestCase):
                 self.assertIn("--share-net", called_argv)
                 self.assertIn("--clearenv", called_argv)
                 self.assertIn("--new-session", called_argv)
-                bind_index = called_argv.index("--bind")
+                bind_index = next(
+                    index for index, item in enumerate(called_argv)
+                    if item == "--bind"
+                    and called_argv[index + 2] == cr.SANDBOX_WORKSPACE
+                )
                 self.assertEqual(called_argv[bind_index + 1], str(workspace.resolve()))
                 self.assertEqual(called_argv[bind_index + 2], cr.SANDBOX_WORKSPACE)
                 chdir_index = called_argv.index("--chdir")
                 self.assertEqual(called_argv[chdir_index + 1], cr.SANDBOX_WORKSPACE)
-                self.assertIn(sys.executable, called_argv)
+                self.assertEqual(
+                    called_argv[called_argv.index("--chdir") + 2],
+                    cr.SANDBOX_CLAUDE,
+                )
+                self.assertIn(
+                    ("--ro-bind", str(Path(sys.executable).resolve()), cr.SANDBOX_CLAUDE),
+                    list(zip(called_argv, called_argv[1:], called_argv[2:])),
+                )
                 self.assertNotIn(str(workspace.resolve()), called_argv[chdir_index + 1:])
                 self.assertNotIn(str(Path.home()), called_argv)
                 self.assertNotIn("--dangerously-skip-permissions", called_argv)
@@ -566,8 +577,7 @@ class ClaudeRunnerTests(unittest.TestCase):
             workspace.mkdir()
             scratch.mkdir()
             argv = cr.build_bwrap_argv(
-                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
-                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
                 node_toolchain=toolchain,
             )
             pairs = list(zip(argv, argv[1:]))
@@ -586,8 +596,7 @@ class ClaudeRunnerTests(unittest.TestCase):
             workspace.mkdir()
             scratch.mkdir()
             argv = cr.build_bwrap_argv(
-                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
-                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
             )
             self.assertNotIn(cr.SANDBOX_NODE_ROOT, argv)
             self.assertIn("--unshare-all", argv)
@@ -602,8 +611,7 @@ class ClaudeRunnerTests(unittest.TestCase):
             workspace.mkdir()
             scratch.mkdir()
             argv = cr.build_bwrap_argv(
-                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
-                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
             )
             ro_binds = {
                 (argv[index + 1], argv[index + 2])
@@ -614,6 +622,80 @@ class ClaudeRunnerTests(unittest.TestCase):
                 if Path(directory).is_dir():
                     self.assertIn((directory, directory), ro_binds)
             self.assertNotIn(("/", "/"), ro_binds)
+
+    def test_private_home_xdg_tmp_and_offline_network_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace, scratch, private_home = (
+                root / "workspace", root / "scratch", root / "private-home"
+            )
+            for path in (workspace, scratch, private_home):
+                path.mkdir()
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
+                credentials_home=root / "credentials",
+                private_home_dir=private_home, allow_network=False,
+            )
+            triples = list(zip(argv, argv[1:], argv[2:]))
+            self.assertIn(("--bind", str(private_home.resolve()), cr.SANDBOX_HOME), triples)
+            self.assertNotIn("--share-net", argv)
+            env = {
+                argv[index + 1]: argv[index + 2]
+                for index, item in enumerate(argv) if item == "--setenv"
+            }
+            self.assertEqual(env["HOME"], cr.SANDBOX_HOME)
+            self.assertEqual(env["TMPDIR"], "/tmp")
+            self.assertEqual(env["XDG_CACHE_HOME"], cr.SANDBOX_XDG_CACHE)
+            self.assertEqual(env["XDG_CONFIG_HOME"], cr.SANDBOX_XDG_CONFIG)
+            self.assertEqual(env["XDG_STATE_HOME"], cr.SANDBOX_XDG_STATE)
+
+    def test_generic_builder_preserves_explicit_true_command_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace, scratch = root / "workspace", root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            command = ["/bin/true"]
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), workspace, scratch, command,
+            )
+            self.assertEqual(argv[-len(command):], command)
+            self.assertEqual(argv[-1], "/bin/true")
+            self.assertNotIn(cr.SANDBOX_CLAUDE, argv)
+
+    def test_online_network_is_explicit_and_credentials_remain_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace, scratch, private_home, credentials = (
+                root / "workspace", root / "scratch", root / "private-home",
+                root / "credentials",
+            )
+            for path in (workspace, scratch, private_home, credentials / ".claude"):
+                path.mkdir(parents=True)
+            (credentials / ".claude.json").write_text("{}")
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
+                credentials_home=credentials,
+                private_home_dir=private_home, allow_network=True,
+            )
+            triples = list(zip(argv, argv[1:], argv[2:]))
+            self.assertIn("--share-net", argv)
+            self.assertIn(
+                ("--ro-bind", str(credentials / ".claude"), f"{cr.SANDBOX_HOME}/.claude"),
+                triples,
+            )
+            self.assertIn(
+                ("--ro-bind", str(credentials / ".claude.json"), f"{cr.SANDBOX_HOME}/.claude.json"),
+                triples,
+            )
+            self.assertNotIn(("--ro-bind", "/", "/"), triples)
+
+    def test_namespace_failure_is_precisely_classified_and_sanitized(self):
+        raw = "bwrap: No permissions to create a new namespace TOKEN=verysecretvalue"
+        with mock.patch.object(Path, "read_text", return_value="1\n"):
+            failure = cr.classify_sandbox_setup_error(raw)
+        self.assertIn("BLOCKED_SANDBOX_APPARMOR_USERNS", str(failure))
+        self.assertNotIn("verysecretvalue", str(failure))
 
     def test_bwrap_omits_missing_optional_runtime_directories(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -629,8 +711,7 @@ class ClaudeRunnerTests(unittest.TestCase):
                 cr, "RUNTIME_READONLY_DIRS", [str(present), str(missing)]
             ):
                 argv = cr.build_bwrap_argv(
-                    Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
-                    [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                    Path(cr.BWRAP_CLI), workspace, scratch, [sys.executable],
                 )
             triples = list(zip(argv, argv[1:], argv[2:]))
             self.assertIn(("--ro-bind", str(present), str(present)), triples)

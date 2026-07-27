@@ -67,6 +67,9 @@ SANDBOX_SCRATCH = "/run/ai-prof/scratch"
 SANDBOX_CLAUDE = "/run/ai-prof/claude"
 SANDBOX_HOME = "/home/claude"
 SANDBOX_NODE_ROOT = "/opt/ai-prof-node"
+SANDBOX_XDG_CACHE = f"{SANDBOX_HOME}/.cache"
+SANDBOX_XDG_CONFIG = f"{SANDBOX_HOME}/.config"
+SANDBOX_XDG_STATE = f"{SANDBOX_HOME}/.local/state"
 NVM_NODE_VERSIONS = Path("/home/agent/.nvm/versions/node")
 
 # The PATH visible *inside* the sandbox. Deliberately unrelated to whatever
@@ -799,22 +802,26 @@ def _claude_auth_env_pairs() -> list[tuple[str, str]]:
 
 def build_bwrap_argv(
     bwrap_path: Path,
-    claude_real_path: Path,
     workspace_dir: Path,
     scratch_dir: Path,
-    claude_argv: list[str],
-    home_dir: Path | None = None,
-    auth_env: list[tuple[str, str]] | None = None,
+    command_argv: list[str],
+    *,
+    readonly_binds: list[tuple[Path, str]] | None = None,
+    credentials_home: Path | None = None,
+    environment: list[tuple[str, str]] | None = None,
     node_toolchain: NodeToolchain | None = None,
+    private_home_dir: Path | None = None,
+    allow_network: bool = False,
 ) -> list[str]:
-    """Build the fixed Bubblewrap argv that confines the Claude subprocess.
+    """Build the production Bubblewrap argv for an explicit command.
 
     Every namespace is unshared (--unshare-all: user, pid, ipc, uts, cgroup,
-    mount, net) except network, which is explicitly re-granted (--share-net)
-    because Claude needs it to reach the Claude API. --die-with-parent and
+    mount, net). Network is re-granted only when the caller explicitly asks.
+    ``command_argv`` is appended unchanged, so this generic builder cannot
+    silently replace a smoke-test command with Claude. --die-with-parent and
     --new-session are always set. The sandbox root is a private tmpfs
-    (never the host root); only the minimum runtime directories needed to
-    execute the resolved Claude binary are bound, and always read-only.
+    (never the host root); only minimum runtime directories and explicit
+    caller-provided executable mounts are bound, and always read-only.
     The isolated workspace is the only read-write bind anywhere in the
     sandbox; --remount-ro / is applied after every other bind so that any
     directory bwrap had to auto-create as a mount anchor (e.g. an
@@ -824,18 +831,25 @@ def build_bwrap_argv(
     written there is isolated and discarded with the sandbox, and never
     reaches the host or the target project.
     """
-    host_home = home_dir if home_dir is not None else Path.home()
+    if not command_argv:
+        raise ValueError("sandbox command argv must not be empty")
 
     argv: list[str] = [str(bwrap_path)]
-    argv += ["--unshare-all", "--share-net"]
+    argv += ["--unshare-all"]
+    if allow_network:
+        argv += ["--share-net"]
     argv += ["--die-with-parent", "--new-session"]
     argv += ["--clearenv"]
     argv += ["--setenv", "HOME", SANDBOX_HOME]
+    argv += ["--setenv", "TMPDIR", "/tmp"]
+    argv += ["--setenv", "XDG_CACHE_HOME", SANDBOX_XDG_CACHE]
+    argv += ["--setenv", "XDG_CONFIG_HOME", SANDBOX_XDG_CONFIG]
+    argv += ["--setenv", "XDG_STATE_HOME", SANDBOX_XDG_STATE]
     sandbox_path = SANDBOX_PATH_ENV
     if node_toolchain is not None:
         sandbox_path = f"{SANDBOX_NODE_ROOT}/bin:{sandbox_path}"
     argv += ["--setenv", "PATH", sandbox_path]
-    for name, value in auth_env or []:
+    for name, value in environment or []:
         argv += ["--setenv", name, value]
 
     argv += ["--tmpfs", "/"]
@@ -845,8 +859,11 @@ def build_bwrap_argv(
     argv += ["--dir", "/run"]
     argv += ["--dir", "/run/ai-prof"]
     argv += ["--dir", "/home"]
-    argv += ["--dir", SANDBOX_HOME]
     argv += ["--dir", "/opt"]
+    if private_home_dir is None:
+        argv += ["--tmpfs", SANDBOX_HOME]
+    else:
+        argv += ["--bind", str(private_home_dir.resolve()), SANDBOX_HOME]
 
     for directory in _existing_runtime_readonly_dirs():
         argv += ["--ro-bind", directory, directory]
@@ -855,22 +872,22 @@ def build_bwrap_argv(
             argv += ["--ro-bind", file_path, file_path]
     if node_toolchain is not None:
         argv += ["--ro-bind", str(node_toolchain.root), SANDBOX_NODE_ROOT]
-    if not _is_within_any(claude_real_path, RUNTIME_READONLY_DIRS):
-        argv += ["--ro-bind", str(claude_real_path), SANDBOX_CLAUDE]
-        claude_argv = [SANDBOX_CLAUDE, *claude_argv[1:]]
+    for source, destination in readonly_binds or []:
+        argv += ["--ro-bind", str(source.resolve()), destination]
 
-    home_claude_dir = host_home / ".claude"
-    home_claude_json = host_home / ".claude.json"
-    if home_claude_dir.is_dir():
-        argv += ["--ro-bind", str(home_claude_dir), f"{SANDBOX_HOME}/.claude"]
-    if home_claude_json.is_file():
-        argv += ["--ro-bind", str(home_claude_json), f"{SANDBOX_HOME}/.claude.json"]
+    if credentials_home is not None:
+        home_claude_dir = credentials_home / ".claude"
+        home_claude_json = credentials_home / ".claude.json"
+        if home_claude_dir.is_dir():
+            argv += ["--ro-bind", str(home_claude_dir), f"{SANDBOX_HOME}/.claude"]
+        if home_claude_json.is_file():
+            argv += ["--ro-bind", str(home_claude_json), f"{SANDBOX_HOME}/.claude.json"]
 
     argv += ["--ro-bind", str(scratch_dir), SANDBOX_SCRATCH]
     argv += ["--bind", str(workspace_dir), SANDBOX_WORKSPACE]
     argv += ["--remount-ro", "/"]
     argv += ["--chdir", SANDBOX_WORKSPACE]
-    argv += claude_argv
+    argv += command_argv
     return argv
 
 
@@ -881,6 +898,31 @@ def sanitize_sandbox_stderr(stderr: str, *, home_dir: Path | None = None) -> str
     detail = detail.replace(host_home, "$HOME")
     detail = re.sub(r"file:///[^\s>]+", "file:///[HOST_PATH_REDACTED]", detail)
     return detail[:2000]
+
+
+def classify_sandbox_setup_error(stderr: str) -> SandboxSetupError:
+    """Return a precise, sanitized Bubblewrap setup failure.
+
+    Ubuntu's AppArmor user-namespace gate produces Bubblewrap's generic
+    "No permissions to create a new namespace" text even when the kernel
+    userns sysctl and namespace quota are enabled.  Preserve that diagnostic
+    while giving operators the actionable production classification.
+    """
+    detail = sanitize_sandbox_stderr(stderr)
+    lowered = detail.lower()
+    if "no permissions to create a new namespace" in lowered:
+        restriction = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        try:
+            apparmor_restricted = restriction.read_text(encoding="ascii").strip() == "1"
+        except OSError:
+            apparmor_restricted = False
+        code = (
+            "BLOCKED_SANDBOX_APPARMOR_USERNS"
+            if apparmor_restricted
+            else "BLOCKED_SANDBOX_USER_NAMESPACE"
+        )
+        return SandboxSetupError(f"{code}: {detail}")
+    return SandboxSetupError(f"BLOCKED_SANDBOX_SETUP: {detail}")
 
 
 def validate_code_task_access(
@@ -930,24 +972,32 @@ def invoke_claude(
     exec_argv = [str(claude_path), *policy_argv[1:]]
     mcp_index = exec_argv.index("--mcp-config") + 1
     exec_argv[mcp_index] = f"{SANDBOX_SCRATCH}/{mcp_config_path.name}"
-    bwrap_argv = build_bwrap_argv(
-        bwrap_path=bwrap_path,
-        claude_real_path=claude_path.resolve(),
-        workspace_dir=workspace.resolve(),
-        scratch_dir=mcp_config_path.resolve().parent,
-        claude_argv=exec_argv,
-        auth_env=_claude_auth_env_pairs(),
-        node_toolchain=node_toolchain,
-    )
-
     try:
-        result = subprocess.run(
-            bwrap_argv,
-            input=bundle,
-            text=True,
-            capture_output=True,
-            timeout=CLAUDE_TIMEOUT_SECONDS,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="private-home-", dir=mcp_config_path.resolve().parent.parent
+        ) as private_home:
+            private_home_path = Path(private_home)
+            for relative in (".cache", ".config", ".local/state"):
+                (private_home_path / relative).mkdir(parents=True)
+            bwrap_argv = build_bwrap_argv(
+                bwrap_path=bwrap_path,
+                workspace_dir=workspace.resolve(),
+                scratch_dir=mcp_config_path.resolve().parent,
+                command_argv=[SANDBOX_CLAUDE, *exec_argv[1:]],
+                readonly_binds=[(claude_path.resolve(), SANDBOX_CLAUDE)],
+                credentials_home=Path.home(),
+                environment=_claude_auth_env_pairs(),
+                node_toolchain=node_toolchain,
+                private_home_dir=private_home_path,
+                allow_network=True,
+            )
+            result = subprocess.run(
+                bwrap_argv,
+                input=bundle,
+                text=True,
+                capture_output=True,
+                timeout=CLAUDE_TIMEOUT_SECONDS,
+            )
     except subprocess.TimeoutExpired as exc:
         raise InfrastructureTimeoutError(
             f"BLOCKED_INFRA_TIMEOUT: sandboxed claude invocation timed out: {exc}"
@@ -963,10 +1013,7 @@ def invoke_claude(
         # Bubblewrap's own diagnostics are always prefixed this way; this
         # means the sandbox itself never started, which is an
         # infrastructure failure, never a Claude execution failure.
-        raise SandboxSetupError(
-            "BLOCKED_SANDBOX_SETUP: bubblewrap failed to establish the sandbox: "
-            f"{sanitize_sandbox_stderr(result.stderr or '')}"
-        )
+        raise classify_sandbox_setup_error(result.stderr or "")
     return result
 
 

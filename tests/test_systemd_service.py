@@ -11,7 +11,7 @@ class ControlCenterServiceTests(unittest.TestCase):
         text = UNIT.read_text(encoding="utf-8")
         self.assertIn("NoNewPrivileges=false", text)
         self.assertIn("PrivateUsers=false", text)
-        self.assertIn("RestrictNamespaces=yes", text)
+        self.assertIn("RestrictNamespaces=no", text)
         self.assertIn("PrivateTmp=true", text)
         self.assertIn("ProtectSystem=strict", text)
         self.assertIn("ProtectHome=read-only", text)
