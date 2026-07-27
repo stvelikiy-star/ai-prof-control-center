@@ -33,6 +33,26 @@ def init_project(path: Path) -> None:
 
 
 class SubmitTaskTests(unittest.TestCase):
+    def test_production_registry_contains_only_safe_pilot(self):
+        root = MODULE_PATH.parents[1]
+        registry = json.loads(
+            (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(registry["version"], 1)
+        self.assertEqual(registry["projects"], [{
+            "project_id": "ai-prof-pilot",
+            "path": "/home/agent/projects/ai-prof-pilot-runtime",
+            "base_branch": "develop",
+            "work_prefixes": ["feature/", "fix/"],
+            "allowed_scope": ["README.md", "docs/**", "tests/**"],
+            "agent_context": "agents/ai-prof-pilot",
+            "allow_commits": False,
+            "allow_push": False,
+            "allow_merge": False,
+            "allow_deployment": False,
+        }])
+        self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
+
     def make_root(self, parent: Path) -> tuple[Path, Path]:
         root = parent / "control"
         project = parent / "pilot"

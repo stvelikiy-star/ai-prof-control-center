@@ -3,7 +3,7 @@
   "projects": [
     {
       "project_id": "ai-prof-pilot",
-      "path": "/home/agent/projects/ai-prof-pilot-sandbox",
+      "path": "/home/agent/projects/ai-prof-pilot-runtime",
       "base_branch": "develop",
       "work_prefixes": [
         "feature/",
