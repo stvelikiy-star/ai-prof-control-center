@@ -166,11 +166,9 @@ def load_projects(path: Path = PROJECTS_PATH) -> dict[str, dict]:
 
 
 def resolve_project(requested: str, projects: dict[str, dict]) -> tuple[str, dict]:
-    candidates = (requested, f"{requested}-pilot")
-    matches = [(name, projects[name]) for name in candidates if name in projects]
-    if len(matches) != 1:
+    if requested not in projects:
         raise BridgeError(f"unknown project: {requested}")
-    return matches[0]
+    return requested, projects[requested]
 
 
 def _scope_candidate(pattern: str) -> str:
@@ -191,15 +189,17 @@ def select_scope(command: Command, project_id: str, project: dict) -> str:
 
     text = f"{command.title} {command.instructions}".lower()
     preferences: list[str] = []
+    if re.search(r"\b(supabase|migration|migrations|database|schema|sql)\b", text):
+        preferences.append("supabase/migrations")
     if re.search(r"\b(readme|read me)\b", text):
         preferences.append("README.md")
     if re.search(r"\b(test|tests|testing|spec|specs)\b", text):
         preferences.append("tests")
     if re.search(r"\b(doc|docs|documentation|guide|manual)\b", text):
         preferences.append("docs")
-    if command.plain and project_id == "ak-bermet-pilot":
-        # AK BERMET's application work lives under its configured ai-system root.
-        preferences.append("ai-system")
+    if project_id == "ak-bermet":
+        # General AK BERMET application work is constrained to application source.
+        preferences.append("src")
 
     for preference in preferences:
         for _pattern, candidate in candidates:

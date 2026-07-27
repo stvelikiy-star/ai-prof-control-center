@@ -21,6 +21,49 @@
       "allow_deployment": false
     },
     {
+      "project_id": "ak-bermet",
+      "path": "/home/agent/projects/ak-bermet",
+      "enabled": true,
+      "base_branch": "develop",
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "src/**",
+        "public/**",
+        "tests/**",
+        "supabase/migrations/**",
+        "AI_CHAT_ARCHITECTURE.md",
+        "CRM_AND_LEADS_ARCHITECTURE.md",
+        "GOOGLE_SHEETS_SETUP.md",
+        "MANAGER_AUTH_AND_PERSISTENCE.md",
+        "MANAGER_WORKSPACE.md",
+        "REAL_AI_SETUP.md",
+        "TODO_NEXT_STAGES.md"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "supabase/.temp/**",
+        "node_modules/**",
+        ".next/**",
+        "lock files"
+      ],
+      "agent_context": "agents/ak-bermet",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20
+    },
+    {
       "project_id": "ak-bermet-pilot",
       "path": "/home/agent/projects/ak-bermet-agent-pilot",
       "enabled": true,

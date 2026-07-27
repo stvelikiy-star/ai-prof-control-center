@@ -50,9 +50,25 @@ class TelegramBridgeTests(unittest.TestCase):
         )
         self.assertEqual(bridge.parse_command("/ai task one | two"), bridge.Command("invalid"))
 
-    def test_project_validation_exact_and_default_alias(self):
-        projects = {"ak-bermet-pilot": {"project_id": "ak-bermet-pilot"}}
-        self.assertEqual(bridge.resolve_project("ak-bermet", projects)[0], "ak-bermet-pilot")
+    def test_project_resolution_is_exact_and_unknown_names_are_rejected(self):
+        projects = {
+            "ak-bermet": {
+                "project_id": "ak-bermet",
+                "path": "/home/agent/projects/ak-bermet",
+            },
+            "ak-bermet-pilot": {
+                "project_id": "ak-bermet-pilot",
+                "path": "/home/agent/projects/ak-bermet-agent-pilot",
+            },
+        }
+        self.assertEqual(
+            bridge.resolve_project("ak-bermet", projects)[1]["path"],
+            "/home/agent/projects/ak-bermet",
+        )
+        self.assertEqual(
+            bridge.resolve_project("ak-bermet-pilot", projects)[1]["path"],
+            "/home/agent/projects/ak-bermet-agent-pilot",
+        )
         with self.assertRaises(bridge.BridgeError):
             bridge.resolve_project("other", projects)
 
@@ -95,21 +111,45 @@ class TelegramBridgeTests(unittest.TestCase):
 
     def test_plain_ak_bermet_scope_is_narrow_and_request_aware(self):
         project = {
-            "allowed_scope": ["README.md", "docs/**", "ai-system/**", "tests/**"],
+            "allowed_scope": [
+                "README.md", "docs/**", "src/**", "tests/**",
+                "supabase/migrations/**",
+            ],
             "work_prefixes": ["feature/", "fix/"],
         }
         cases = {
-            "Fix the checkout calculation": "ai-system",
+            "Fix the checkout calculation": "src",
             "Add regression tests": "tests",
             "Update documentation": "docs",
             "Correct README": "README.md",
+            "Add a Supabase migration for bookings": "supabase/migrations",
         }
         for instructions, expected in cases.items():
             command = bridge.parse_command(f"/ai task {instructions}")
             with self.subTest(instructions=instructions):
                 self.assertEqual(
-                    bridge.select_scope(command, "ak-bermet-pilot", project), expected,
+                    bridge.select_scope(command, "ak-bermet", project), expected,
                 )
+
+    def test_plain_task_defaults_to_exact_real_project(self):
+        command = bridge.parse_command("/ai task Fix the booking form")
+        self.assertEqual(command.project, "ak-bermet")
+        projects = {
+            "ak-bermet": {
+                "project_id": "ak-bermet",
+                "allowed_scope": ["src/**"],
+                "work_prefixes": ["feature/"],
+            },
+            "ak-bermet-pilot": {
+                "project_id": "ak-bermet-pilot",
+                "allowed_scope": ["ai-system/**"],
+                "work_prefixes": ["feature/"],
+            },
+        }
+        args, project_id = bridge.submit_arguments(command, projects)
+        self.assertEqual(project_id, "ak-bermet")
+        self.assertEqual(args[args.index("--project") + 1], "ak-bermet")
+        self.assertEqual(args[args.index("--scope") + 1], "src")
 
     def test_real_cli_reproduces_missing_contract_rejection_then_accepts_bridge_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,17 +168,17 @@ class TelegramBridgeTests(unittest.TestCase):
                 ["git", "config", "user.name", "Test"], cwd=project_path, check=True,
             )
             (project_path / "README.md").write_text("test\n", encoding="utf-8")
-            (project_path / "ai-system").mkdir()
+            (project_path / "src").mkdir()
             subprocess.run(["git", "add", "."], cwd=project_path, check=True)
             subprocess.run(["git", "commit", "-qm", "base"], cwd=project_path, check=True)
             registry = {
                 "version": 1,
                 "projects": [{
-                    "project_id": "ak-bermet-pilot",
+                    "project_id": "ak-bermet",
                     "path": str(project_path),
                     "base_branch": "develop",
                     "work_prefixes": ["feature/", "fix/"],
-                    "allowed_scope": ["README.md", "ai-system/**"],
+                    "allowed_scope": ["README.md", "src/**"],
                     "agent_context": "agents/pilot",
                     "allow_commits": False,
                     "allow_push": False,
@@ -156,7 +196,7 @@ class TelegramBridgeTests(unittest.TestCase):
                 [
                     sys.executable, str(bridge.SUBMIT_TASK),
                     "--root", str(root), "--state-root", str(state), "create",
-                    "--project", "ak-bermet-pilot", "--title", "Fix checkout",
+                    "--project", "ak-bermet", "--title", "Fix checkout",
                     "--instructions", "Fix checkout",
                 ],
                 cwd=root, text=True, capture_output=True,
@@ -164,15 +204,15 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("--work-branch", rejected.stderr)
 
-            projects = {"ak-bermet-pilot": registry["projects"][0]}
+            projects = {"ak-bermet": registry["projects"][0]}
             command = bridge.parse_command("/ai task Fix checkout")
             with (
                 mock.patch.object(bridge, "ROOT", root),
                 mock.patch.object(bridge, "STATE_DIR", state),
             ):
                 task_id, project_id = bridge.submit(command, projects)
-            self.assertEqual(project_id, "ak-bermet-pilot")
-            self.assertRegex(task_id, r"^AK_BERMET_PILOT_")
+            self.assertEqual(project_id, "ak-bermet")
+            self.assertRegex(task_id, r"^AK_BERMET_")
             self.assertTrue((state / "queue/pending" / f"{task_id}.md").is_file())
 
     def test_rejection_reason_is_sanitized_and_reported(self):
