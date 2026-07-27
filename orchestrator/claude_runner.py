@@ -1645,7 +1645,13 @@ def process_one(paths: ClaudePaths) -> int:
         log_path.write_text(
             orch.redact(f"{status_code}\n{type(exc).__name__}: {exc}\n"), encoding="utf-8",
         )
-        print(status_code, file=sys.stderr)
+        if isinstance(exc, SandboxSetupError):
+            # The supervisor captures this stream in control-loop.log.  Return
+            # the already-sanitized real bwrap diagnostic instead of reducing
+            # every mount/namespace/setup failure to the same opaque token.
+            print(str(exc), file=sys.stderr)
+        else:
+            print(status_code, file=sys.stderr)
         return 1
 
 
