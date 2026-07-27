@@ -240,9 +240,116 @@ class TelegramBridgeTests(unittest.TestCase):
     def test_secret_redaction_in_plain_text_and_logs(self):
         token = self.config.token
         self.assertNotIn(token, bridge.redact(f"request failed at bot{token}/getUpdates"))
+        for secret in (
+            "password=hunter2",
+            "DATABASE_URL=postgresql://admin:private@db.example/app",
+            "redis://user:private@cache.example/0",
+            "sk-abcdefghijklmnopqrstuvwxyz123456",
+        ):
+            with self.subTest(secret=secret):
+                self.assertNotIn("private", bridge.redact(secret))
+                self.assertNotIn("hunter2", bridge.redact(secret))
+                self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", bridge.redact(secret))
         record = logging.LogRecord("test", logging.ERROR, "", 0, "token=%s", (token,), None)
         bridge.RedactingFilter().filter(record)
         self.assertNotIn(token, record.getMessage())
+
+    def test_recent_tasks_maps_every_public_status_latest_first_and_limits_five(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            projects = {"pilot": {"path": "/projects/pilot"}}
+            cases = (
+                ("pending", "queued"), ("active", "running"),
+                ("approved", "passed"), ("failed", "failed"),
+                ("blocked", "blocked"), ("cancelled", "cancelled"),
+            )
+            for index, (queue, _status) in enumerate(cases, 1):
+                task_id = f"PILOT_20260727T12000{index}Z_A{index}"
+                directory = state / "queue" / queue
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / f"{task_id}.md").write_text(
+                    f"Task-ID: {task_id}\nProject-Path: /projects/pilot\n"
+                    f"Goal: title {index}\nInstructions: full private prompt {index}\n",
+                    encoding="utf-8",
+                )
+            tasks = bridge.recent_tasks(state, projects, limit=10)
+            self.assertEqual([task["state"] for task in tasks], [
+                status for _queue, status in reversed(cases)
+            ])
+            self.assertEqual(len(bridge.recent_tasks(state, projects)), 5)
+            self.assertNotIn("full private prompt", json.dumps(tasks))
+
+    def test_internal_queue_states_map_to_queued_and_passed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            for index, (queue, expected) in enumerate((
+                ("review", "queued"), ("pending_codex", "queued"),
+                ("completed", "passed"),
+            )):
+                task_id = f"TASK_20260727T13000{index}Z_X"
+                directory = state / "queue" / queue
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / f"{task_id}.md").write_text(
+                    f"Task-ID: {task_id}\nGoal: test\n", encoding="utf-8",
+                )
+            self.assertEqual(
+                {task["state"] for task in bridge.recent_tasks(state, {}, 10)},
+                {"queued", "passed"},
+            )
+
+    def test_status_result_is_allowlisted_and_malformed_files_are_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "PILOT_20260727T140000Z_SAFE"
+            queue = state / "queue/failed"
+            logs = state / "logs/orchestrator"
+            queue.mkdir(parents=True)
+            logs.mkdir(parents=True)
+            (queue / f"{task_id}.md").write_bytes(b"\xff malformed")
+            (logs / f"{task_id}-01B.log").write_text(
+                "full prompt: do not expose\n"
+                "DATABASE_URL=postgresql://admin:secret@db/app\n"
+                "CLAUDE_FAILED\n",
+                encoding="utf-8",
+            )
+            message = bridge.status_message(state, {})
+            self.assertIn("failed | CLAUDE FAILED", message)
+            self.assertNotIn("full prompt", message)
+            self.assertNotIn("secret", message)
+
+    def test_status_handler_preserves_authorization_and_uses_runtime_report(self):
+        client = mock.Mock()
+        message = {
+            "chat": {"id": -1001}, "from": {"id": 42}, "text": "/ai status",
+        }
+        with (
+            mock.patch.object(bridge, "load_projects", return_value={}),
+            mock.patch.object(bridge, "status_message", return_value="runtime status") as report,
+        ):
+            bridge.handle_update({"message": message}, self.config, client)
+        report.assert_called_once_with(bridge.STATE_DIR, {})
+        client.send.assert_called_once_with("runtime status")
+
+    def test_control_center_health_handles_running_stopped_and_malformed_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            run = state / "run"
+            run.mkdir()
+            self.assertEqual(bridge.control_center_health(state), "stopped")
+            lock = (run / "supervisor.lock").open("w", encoding="utf-8")
+            bridge.fcntl.flock(lock, bridge.fcntl.LOCK_EX | bridge.fcntl.LOCK_NB)
+            try:
+                (run / "heartbeat.json").write_text(
+                    '{"timestamp":"2999-01-01T00:00:00+00:00"}', encoding="utf-8",
+                )
+                self.assertEqual(bridge.control_center_health(state), "healthy")
+                (run / "heartbeat.json").write_text("{bad", encoding="utf-8")
+                self.assertEqual(
+                    bridge.control_center_health(state), "degraded (invalid heartbeat)",
+                )
+            finally:
+                bridge.fcntl.flock(lock, bridge.fcntl.LOCK_UN)
+                lock.close()
 
     def test_unauthorized_and_ordinary_updates_send_nothing(self):
         client = mock.Mock()
