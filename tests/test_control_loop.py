@@ -68,7 +68,7 @@ class ControlLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = loop.build_paths(root)
-            (root / "queue/pending").mkdir(parents=True)
+            (root / "queue/pending").mkdir(parents=True, exist_ok=True)
             (root / "queue/pending/task.md").write_text("task", encoding="utf-8")
             loop.atomic_write(paths.pause, "yes\n")
             lock = loop.acquire_supervisor_lock(paths.lock)
@@ -86,6 +86,29 @@ class ControlLoopTests(unittest.TestCase):
             loop.write_heartbeat(paths, state="running", stage="claude")
             data = json.loads(paths.heartbeat.read_text(encoding="utf-8"))
             self.assertEqual(data["stage"], "claude")
+
+    def test_runtime_activity_does_not_dirty_source_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / "source"
+            runtime = parent / "runtime"
+            source.mkdir()
+            loop.subprocess.run(["git", "init", "-q", source], check=True)
+            (source / "tracked.txt").write_text("source\n", encoding="utf-8")
+            loop.subprocess.run(["git", "-C", source, "add", "tracked.txt"], check=True)
+            before = loop.subprocess.run(
+                ["git", "-C", source, "status", "--porcelain"],
+                check=True, capture_output=True, text=True,
+            ).stdout
+            paths = loop.build_paths(source, runtime)
+            loop.write_heartbeat(paths, state="running")
+            loop.atomic_write(paths.pause, "paused\n")
+            self.assertEqual(loop.queue_counts(runtime)["pending"], 0)
+            status = loop.subprocess.run(
+                ["git", "-C", source, "status", "--porcelain"],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(status.stdout, before)
 
     def test_self_test(self):
         self.assertEqual(loop.run_self_test(), 0)

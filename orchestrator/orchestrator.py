@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
 
 
 REQUIRED_FIELDS = [
@@ -59,17 +61,18 @@ class Paths:
     lock: Path
 
 
-def build_paths(root: Path) -> Paths:
+def build_paths(root: Path, state_root: Path | str | None = None) -> Paths:
+    runtime = initialize(root if state_root is None else state_root)
     paths = Paths(
         root=root,
-        pending=root / "queue/pending",
-        active=root / "queue/active",
-        review=root / "queue/review",
-        failed=root / "queue/failed",
-        completed=root / "queue/completed",
-        blocked=root / "queue/blocked",
-        logs=root / "logs/orchestrator",
-        lock=root / "orchestrator/orchestrator.lock",
+        pending=runtime / "queue/pending",
+        active=runtime / "queue/active",
+        review=runtime / "queue/review",
+        failed=runtime / "queue/failed",
+        completed=runtime / "queue/completed",
+        blocked=runtime / "queue/blocked",
+        logs=runtime / "logs/orchestrator",
+        lock=runtime / "run/orchestrator.lock",
     )
     for directory in [
         paths.pending, paths.active, paths.review, paths.failed,
@@ -281,11 +284,12 @@ def process_one(paths: Paths) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    paths = build_paths(root)
+    paths = build_paths(root, args.state_root)
 
     try:
         lock_handle = acquire_lock(paths.lock)

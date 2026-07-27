@@ -1,5 +1,9 @@
 # AI PROF Task Queue
 
+Этот каталог содержит только документацию. Живая очередь находится в
+`/home/agent/.local/state/ai-prof-control-center/queue`; файлы задач никогда
+не создаются и не перемещаются внутри Git worktree.
+
 Статусы:
 - `pending` — ожидает запуска Stage 01A;
 - `active` — задача захвачена оркестратором (Stage 01A или Stage 01B);
