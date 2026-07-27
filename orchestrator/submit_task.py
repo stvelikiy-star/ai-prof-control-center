@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
+from operation_profiles import resolve_profile
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -177,10 +178,13 @@ def make_task_id(project_id: str) -> str:
 
 def render_task(
     project: dict, task_id: str, title: str, instructions: str,
-    work_branch: str, scope: list[str],
+    work_branch: str, scope: list[str], execution_mode: str = "code",
+    operation_profile: str = "none",
 ) -> str:
     values = [
         ("Task-ID", task_id),
+        ("Execution-Mode", execution_mode),
+        ("Operation-Profile", operation_profile),
         ("Project-Path", project["path"]),
         ("Base-Branch", project["base_branch"]),
         ("Work-Branch", work_branch),
@@ -321,6 +325,8 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--instructions", required=True)
     create.add_argument("--work-branch", required=True)
     create.add_argument("--scope", action="append", required=True)
+    create.add_argument("--execution-mode", choices=("code", "operations"), default="code")
+    create.add_argument("--operation-profile")
     create.add_argument("--dry-run", action="store_true")
     commands.add_parser("list")
     show = commands.add_parser("show")
@@ -366,6 +372,17 @@ def main() -> int:
             if args.project not in projects:
                 raise IntakeError(f"unknown project: {args.project}")
             project = projects[args.project]
+            if args.execution_mode == "operations":
+                if not args.operation_profile:
+                    raise IntakeError("operation profile is required for operations mode")
+                try:
+                    profile = resolve_profile(args.operation_profile)
+                except ValueError as exc:
+                    raise IntakeError(str(exc)) from exc
+                if Path(project["path"]) != profile.repository:
+                    raise IntakeError("operation profile repository does not match project")
+            elif args.operation_profile:
+                raise IntakeError("operation profile is only valid for operations mode")
             title = validate_text("title", args.title, TITLE_LIMIT)
             instructions = validate_text("instructions", args.instructions, INSTRUCTION_LIMIT)
             if not WORK_BRANCH_RE.fullmatch(args.work_branch) or not any(
@@ -376,6 +393,7 @@ def main() -> int:
             task_id = make_task_id(args.project)
             content = render_task(
                 project, task_id, title, instructions, args.work_branch, scope,
+                args.execution_mode, args.operation_profile or "none",
             )
             result = {
                 "task_id": task_id,

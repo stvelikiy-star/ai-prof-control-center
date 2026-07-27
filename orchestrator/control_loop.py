@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded supervisor for Stage 01A -> Claude -> Codex processing."""
+"""Bounded supervisor for operations and Stage 01A -> Claude -> Codex."""
 from __future__ import annotations
 
 import argparse
@@ -126,6 +126,7 @@ def child_commands(root: Path, runtime: Path) -> list[tuple[str, list[str]]]:
     python = sys.executable
     base = str(root)
     return [
+        ("operations", [python, str(root / "orchestrator/operations_runner.py"), "--root", base, "--state-root", str(runtime)]),
         ("stage_01a", [python, str(root / "orchestrator/orchestrator.py"), "--root", base, "--state-root", str(runtime)]),
         ("claude", [python, str(root / "orchestrator/claude_runner.py"), "--root", base, "--state-root", str(runtime)]),
         ("codex", [python, str(root / "orchestrator/codex_runner.py"), "--root", base, "--state-root", str(runtime), "--once"]),
@@ -279,7 +280,7 @@ def run_self_test() -> int:
             raise RuntimeError("SELF_TEST_HEARTBEAT_FAILED")
         if redact("TOKEN=supersecret") != "[REDACTED]":
             raise RuntimeError("SELF_TEST_REDACTION_FAILED")
-        if [name for name, _ in child_commands(root, paths.state.parent)] != ["stage_01a", "claude", "codex"]:
+        if [name for name, _ in child_commands(root, paths.state.parent)] != ["operations", "stage_01a", "claude", "codex"]:
             raise RuntimeError("SELF_TEST_STAGE_ORDER_FAILED")
         first = acquire_supervisor_lock(paths.lock)
         try:
