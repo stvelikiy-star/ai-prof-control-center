@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -31,8 +33,20 @@ ENV_KEYS = {
     "AI_PROF_TELEGRAM_OWNER_USER_ID",
 }
 TOKEN_RE = re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{20,}")
+API_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")
 SECRET_VALUE_RE = re.compile(
-    r"(?i)\b(token|secret|password|credential|api[_-]?key)(\s*[=:]\s*)([^\s,;]+)"
+    r"(?i)\b(token|secret|password|credential|api[_-]?key|database[_-]?url|db[_-]?url)"
+    r"(\s*[=:]\s*)([^\s,;]+)"
+)
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://\S+")
+STATUS_QUEUES = {
+    "pending": "queued", "review": "queued", "pending_codex": "queued",
+    "active": "running", "approved": "passed", "completed": "passed",
+    "failed": "failed", "blocked": "blocked", "cancelled": "cancelled",
+}
+SAFE_RESULT_RE = re.compile(
+    r"\b(BLOCKED_[A-Z0-9_]+|[A-Z][A-Z0-9_]*_FAILED|"
+    r"AUDIT_(?:PASS|FAIL)|PASS WITH FIXES|PASS|FAIL)\b"
 )
 HELP = (
     "AI PROF commands:\n"
@@ -66,8 +80,141 @@ class Command:
 def redact(value: object) -> str:
     text = str(value)
     text = TOKEN_RE.sub("[REDACTED]", text)
+    text = API_TOKEN_RE.sub("[REDACTED]", text)
+    text = URL_CREDENTIAL_RE.sub("[REDACTED_URL]", text)
     text = SECRET_VALUE_RE.sub(r"\1\2[REDACTED]", text)
     return text
+
+
+def _task_fields(path: Path) -> dict[str, str]:
+    """Read only status-safe contract fields; Instructions are never returned."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return {}
+    fields = {}
+    for key in ("Task-ID", "Project-Path", "Goal"):
+        match = re.search(rf"(?mi)^\s*{re.escape(key)}:\s*([^\r\n]+)", text)
+        if match:
+            fields[key] = match.group(1).strip()
+    return fields
+
+
+def _task_time(task_id: str, path: Path) -> float:
+    match = re.search(r"_(\d{8}T\d{6}Z)(?:_|$)", task_id)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(
+                tzinfo=timezone.utc
+            ).timestamp()
+        except ValueError:
+            pass
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0
+
+
+def _safe_result(state_root: Path, task_id: str) -> str:
+    logs = state_root / "logs/orchestrator"
+    try:
+        candidates = sorted(
+            logs.glob(f"{task_id}-*.log"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return ""
+    for path in candidates:
+        try:
+            # Logs can contain full prompts. Extract only a fixed status vocabulary.
+            matches = SAFE_RESULT_RE.findall(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        if matches:
+            return redact(matches[-1]).replace("_", " ")[:120]
+    return ""
+
+
+def recent_tasks(
+    state_root: Path, projects: dict[str, dict], limit: int = 5,
+) -> list[dict[str, str]]:
+    path_to_project = {
+        str(item.get("path")): key for key, item in projects.items()
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    }
+    found = []
+    for queue, public_state in STATUS_QUEUES.items():
+        directory = state_root / "queue" / queue
+        try:
+            paths = list(directory.glob("*.md"))
+        except OSError:
+            continue
+        for path in paths:
+            fields = _task_fields(path)
+            task_id = fields.get("Task-ID") or path.stem
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", task_id):
+                task_id = "malformed-task"
+            project = path_to_project.get(fields.get("Project-Path", ""), "unknown")
+            title = redact(fields.get("Goal", "untitled"))
+            title = re.sub(r"[\x00-\x1f\x7f]+", " ", title).strip()[:120] or "untitled"
+            found.append({
+                "id": task_id, "project": project, "title": title,
+                "state": public_state, "result": _safe_result(state_root, task_id),
+                "_time": str(_task_time(task_id, path)),
+            })
+    found.sort(key=lambda item: (float(item["_time"]), item["id"]), reverse=True)
+    for item in found:
+        item.pop("_time", None)
+    return found[:limit]
+
+
+def control_center_health(state_root: Path) -> str:
+    lock_path = state_root / "run/supervisor.lock"
+    running = False
+    try:
+        handle = lock_path.open("r", encoding="utf-8")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            running = True
+        else:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            handle.close()
+    except OSError:
+        return "stopped"
+    if not running:
+        return "stopped"
+    try:
+        heartbeat = json.loads((state_root / "run/heartbeat.json").read_text(encoding="utf-8"))
+        stamp = datetime.fromisoformat(heartbeat["timestamp"])
+        age = (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()
+        return "healthy" if age <= 90 else "degraded (stale heartbeat)"
+    except (OSError, ValueError, TypeError, KeyError):
+        return "degraded (invalid heartbeat)"
+
+
+def status_message(state_root: Path, projects: dict[str, dict]) -> str:
+    lines = [
+        "AI PROF status",
+        "Bridge: healthy (responding)",
+        f"Control Center: {control_center_health(state_root)}",
+    ]
+    tasks = recent_tasks(state_root, projects)
+    if not tasks:
+        lines.append("Recent tasks: none")
+    else:
+        lines.append("Recent tasks:")
+        for task in tasks:
+            line = (
+                f"- {task['id']} | {task['project']} | {task['title']} | "
+                f"{task['state']}"
+            )
+            if task["result"]:
+                line += f" | {task['result']}"
+            lines.append(line)
+    return "\n".join(lines)
 
 
 class RedactingFilter(logging.Filter):
@@ -349,8 +496,8 @@ def handle_update(update: object, config: Config, client: TelegramClient) -> Non
     if command.name in {"help", "invalid"}:
         client.send(HELP)
     elif command.name == "status":
-        projects = ", ".join(sorted(load_projects()))
-        client.send(f"AI PROF bridge is running. Registered projects: {projects}")
+        projects = load_projects()
+        client.send(status_message(STATE_DIR, projects))
     elif command.name == "task":
         try:
             task_id, project_id = submit(command, load_projects())
