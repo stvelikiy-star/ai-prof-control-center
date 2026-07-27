@@ -37,22 +37,22 @@ class ControlLoopTests(unittest.TestCase):
 
             with mock.patch.object(loop, "run_child", side_effect=fake_run):
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
-            self.assertEqual(seen, ["stage_01a", "claude", "codex"])
+            self.assertEqual(seen, ["operations", "stage_01a", "claude", "codex"])
             self.assertEqual(maximum, 1)
 
     def test_infrastructure_result_stops_cycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = loop.build_paths(Path(tmp))
-            with mock.patch.object(loop, "run_child", side_effect=[124, 0, 0]) as run:
+            with mock.patch.object(loop, "run_child", side_effect=[124, 0, 0, 0]) as run:
                 self.assertEqual(loop.run_cycle(paths, 1), 124)
             self.assertEqual(run.call_count, 1)
 
     def test_task_failure_continues_pipeline(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = loop.build_paths(Path(tmp))
-            with mock.patch.object(loop, "run_child", side_effect=[1, 1, 0]) as run:
+            with mock.patch.object(loop, "run_child", side_effect=[1, 1, 1, 0]) as run:
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
-            self.assertEqual(run.call_count, 3)
+            self.assertEqual(run.call_count, 4)
 
     def test_child_timeout_and_redacted_log(self):
         with tempfile.TemporaryDirectory() as tmp:

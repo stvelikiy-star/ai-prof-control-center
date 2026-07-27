@@ -3,6 +3,8 @@
 Обязательные поля:
 
 - `Task-ID:`
+- `Execution-Mode: code|operations` (отсутствующее поле означает `code`)
+- `Operation-Profile:` (точный ключ профиля или `none`)
 - `Project-Path:`
 - `Base-Branch:`
 - `Work-Branch:`
@@ -17,6 +19,9 @@
 - `Owner-Approval-Required: yes|no`
 
 Правила:
+- Режим по умолчанию — `code`; он сохраняет существующий Bubblewrap sandbox.
+- `operations` выполняется отдельным runner только по точному локальному профилю;
+  Goal/Instructions никогда не интерпретируются как команды.
 - Work-Branch начинается только с `feature/` или `fix/`.
 - Этап 01A не запускает Claude, не изменяет целевой проект, не делает merge/push/deploy.
 - Он только валидирует задачу, доступы и контекст, затем безопасно перемещает её в `review`.
@@ -47,3 +52,13 @@
 `submit_task.py` создаёт тот же Task Schema V2 атомарно в `queue/pending`.
 Реестр `projects.json` ограничивает проект, базовую/рабочую ветку и
 `Scope-Files`; commit, push, merge и deployment запрещены.
+
+Для зарегистрированной операции:
+
+```text
+--execution-mode operations
+--operation-profile ak-bermet-supabase-rpc-deploy
+```
+
+Остальные аргументы intake остаются обязательными для совместимости схемы, но
+не становятся командами операции.

@@ -159,6 +159,8 @@ class SubmitTaskTests(unittest.TestCase):
             self.assertIn("Scope-Files: README.md", text)
             self.assertEqual(values["Scope"], "Only the approved Scope-Files listed below")
             self.assertIn("Instructions: Instruction", text)
+            self.assertIn("Execution-Mode: code", text)
+            self.assertIn("Operation-Profile: none", text)
             self.assertNotIn("Scope: Instruction\n", text)
 
     def test_create_dry_run_and_real_queue_creation(self):
@@ -193,6 +195,19 @@ class SubmitTaskTests(unittest.TestCase):
 
     def test_self_test(self):
         self.assertEqual(submit.run_self_test(), 0)
+
+    def test_operations_intake_rejects_unknown_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            argv = [
+                "submit_task.py", "--root", str(root), "--state-root", str(root),
+                "create", "--project", "pilot", "--title", "Title",
+                "--instructions", "Instruction", "--work-branch", "feature/task",
+                "--scope", "README.md", "--execution-mode", "operations",
+                "--operation-profile", "unknown",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(submit.main(), 2)
 
 
 if __name__ == "__main__":

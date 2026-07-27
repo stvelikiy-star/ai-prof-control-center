@@ -33,6 +33,8 @@ REQUIRED_FIELDS = [
     "Owner-Approval-Required",
 ]
 
+EXECUTION_MODES = {"code", "operations"}
+
 SECRET_PATTERNS = [
     re.compile(r"(?i)(token|password|secret|api[_-]?key)\s*=\s*\S+"),
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
@@ -94,6 +96,16 @@ def parse_task(path: Path) -> tuple[dict[str, str], str]:
         raise ValueError("Missing required fields: " + ", ".join(missing))
     if values["Owner-Approval-Required"].lower() not in {"yes", "no"}:
         raise ValueError("Owner-Approval-Required must be yes or no")
+    mode_match = re.search(r"(?mi)^\s*Execution-Mode:\s*(.+?)\s*$", text)
+    profile_match = re.search(r"(?mi)^\s*Operation-Profile:\s*(.+?)\s*$", text)
+    values["Execution-Mode"] = mode_match.group(1).strip() if mode_match else "code"
+    values["Operation-Profile"] = profile_match.group(1).strip() if profile_match else "none"
+    if values["Execution-Mode"] not in EXECUTION_MODES:
+        raise ValueError("Execution-Mode must be code or operations")
+    if values["Execution-Mode"] == "operations" and values["Operation-Profile"] == "none":
+        raise ValueError("Operation-Profile is required for operations mode")
+    if values["Execution-Mode"] == "code" and values["Operation-Profile"] != "none":
+        raise ValueError("Operation-Profile is only valid for operations mode")
     return values, text
 
 
@@ -216,7 +228,16 @@ def run_self_test(root: Path) -> int:
 
 
 def process_one(paths: Paths) -> int:
-    tasks = sorted(paths.pending.glob("*.md"))
+    tasks = []
+    for candidate in sorted(paths.pending.glob("*.md")):
+        try:
+            candidate_data, _ = parse_task(candidate)
+        except Exception:
+            tasks.append(candidate)
+            break
+        if candidate_data["Execution-Mode"] == "code":
+            tasks.append(candidate)
+            break
     if not tasks:
         print("QUEUE_EMPTY")
         return 0
