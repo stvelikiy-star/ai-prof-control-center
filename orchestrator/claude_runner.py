@@ -34,6 +34,8 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
 
 
 _ORCHESTRATOR_PATH = Path(__file__).resolve().parent / "orchestrator.py"
@@ -285,16 +287,17 @@ class ClaudePaths:
     lock: Path
 
 
-def build_claude_paths(root: Path) -> ClaudePaths:
+def build_claude_paths(root: Path, state_root: Path | str | None = None) -> ClaudePaths:
+    runtime = initialize(root if state_root is None else state_root)
     paths = ClaudePaths(
         root=root,
-        review=root / "queue/review",
-        active=root / "queue/active",
-        blocked=root / "queue/blocked",
-        failed=root / "queue/failed",
-        pending_codex=root / "queue/pending_codex",
-        logs=root / "logs/orchestrator",
-        lock=root / "orchestrator/orchestrator.lock",
+        review=runtime / "queue/review",
+        active=runtime / "queue/active",
+        blocked=runtime / "queue/blocked",
+        failed=runtime / "queue/failed",
+        pending_codex=runtime / "queue/pending_codex",
+        logs=runtime / "logs/orchestrator",
+        lock=runtime / "run/orchestrator.lock",
     )
     for directory in [
         paths.review, paths.active, paths.blocked,
@@ -1544,11 +1547,12 @@ def process_one(paths: ClaudePaths) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    paths = build_claude_paths(root)
+    paths = build_claude_paths(root, args.state_root)
 
     try:
         lock_handle = orch.acquire_lock(paths.lock)

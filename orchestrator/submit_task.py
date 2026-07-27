@@ -13,6 +13,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -308,6 +310,7 @@ def run_self_test() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(DEFAULT_ROOT))
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     commands = parser.add_subparsers(dest="command")
@@ -335,6 +338,7 @@ def main() -> int:
     if not args.command:
         parser.error("a command or --self-test is required")
     root = Path(args.root).resolve()
+    runtime = initialize(args.state_root)
     try:
         projects = read_registry(root)
         if args.command == "projects":
@@ -347,15 +351,15 @@ def main() -> int:
                 for item in projects.values()
             ], args.json)
         elif args.command == "list":
-            emit(list_tasks(root), args.json)
+            emit(list_tasks(runtime), args.json)
         elif args.command == "show":
-            queue, path = locate_task(root, args.task_id)
+            queue, path = locate_task(runtime, args.task_id)
             emit(
                 {"task_id": args.task_id, "queue": queue, "content": path.read_text(encoding="utf-8")},
                 args.json,
             )
         elif args.command == "cancel":
-            target = move_cancel(root, args.task_id)
+            target = move_cancel(runtime, args.task_id)
             emit({"task_id": args.task_id, "queue": "cancelled", "path": str(target)}, args.json)
         elif args.command == "create":
             if args.project not in projects:
@@ -378,7 +382,7 @@ def main() -> int:
                 "content": content,
             }
             if not args.dry_run:
-                destination = root / "queue" / "pending" / f"{task_id}.md"
+                destination = runtime / "queue" / "pending" / f"{task_id}.md"
                 atomic_create(destination, content)
                 result["path"] = str(destination)
             emit(result, args.json)

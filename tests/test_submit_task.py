@@ -151,14 +151,15 @@ class SubmitTaskTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root, _project = self.make_root(Path(tmp))
             base = [
-                "submit_task.py", "--root", str(root), "--json", "create",
+                "submit_task.py", "--root", str(root), "--state-root", str(root),
+                "--json", "create",
                 "--project", "pilot", "--title", "Title",
                 "--instructions", "Instruction", "--work-branch", "feature/task",
                 "--scope", "README.md",
             ]
             with mock.patch.object(sys, "argv", base + ["--dry-run"]):
                 self.assertEqual(submit.main(), 0)
-            self.assertFalse((root / "queue/pending").exists())
+            self.assertFalse(list((root / "queue/pending").glob("*.md")))
             with mock.patch.object(sys, "argv", base):
                 self.assertEqual(submit.main(), 0)
             tasks = list((root / "queue/pending").glob("*.md"))

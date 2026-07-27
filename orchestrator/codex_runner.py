@@ -44,6 +44,8 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
 
 
 _ORCHESTRATOR_PATH = Path(__file__).resolve().parent / "orchestrator.py"
@@ -187,16 +189,17 @@ class CodexPaths:
     lock: Path
 
 
-def build_codex_paths(root: Path) -> CodexPaths:
+def build_codex_paths(root: Path, state_root: Path | str | None = None) -> CodexPaths:
+    runtime = initialize(root if state_root is None else state_root)
     paths = CodexPaths(
         root=root,
-        pending_codex=root / "queue/pending_codex",
-        active=root / "queue/active",
-        approved=root / "queue/approved",
-        review=root / "queue/review",
-        blocked=root / "queue/blocked",
-        logs=root / "logs/orchestrator",
-        lock=root / "orchestrator/orchestrator.lock",
+        pending_codex=runtime / "queue/pending_codex",
+        active=runtime / "queue/active",
+        approved=runtime / "queue/approved",
+        review=runtime / "queue/review",
+        blocked=runtime / "queue/blocked",
+        logs=runtime / "logs/orchestrator",
+        lock=runtime / "run/orchestrator.lock",
     )
     for directory in [
         paths.pending_codex, paths.active, paths.approved,
@@ -790,13 +793,14 @@ def process_one(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--codex-cli", default=str(DEFAULT_CODEX_CLI))
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    paths = build_codex_paths(root)
+    paths = build_codex_paths(root, args.state_root)
 
     try:
         lock_handle = orch.acquire_lock(paths.lock)

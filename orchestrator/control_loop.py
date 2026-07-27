@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -34,21 +36,22 @@ class ControlPaths:
     root: Path
     state: Path
     lock: Path
+    pid: Path
     heartbeat: Path
     pause: Path
     stop: Path
     log: Path
 
 
-def build_paths(root: Path) -> ControlPaths:
-    state = root / "state"
-    logs = root / "logs" / "orchestrator"
-    state.mkdir(parents=True, exist_ok=True)
-    logs.mkdir(parents=True, exist_ok=True)
+def build_paths(root: Path, state_root: Path | str | None = None) -> ControlPaths:
+    runtime = initialize(root if state_root is None else state_root)
+    state = runtime / "run"
+    logs = runtime / "logs" / "orchestrator"
     return ControlPaths(
         root=root,
         state=state,
         lock=state / "supervisor.lock",
+        pid=state / "supervisor.pid",
         heartbeat=state / "heartbeat.json",
         pause=state / "paused",
         stop=state / "stop",
@@ -119,13 +122,13 @@ def acquire_supervisor_lock(path: Path):
     return handle
 
 
-def child_commands(root: Path) -> list[tuple[str, list[str]]]:
+def child_commands(root: Path, runtime: Path) -> list[tuple[str, list[str]]]:
     python = sys.executable
     base = str(root)
     return [
-        ("stage_01a", [python, str(root / "orchestrator/orchestrator.py"), "--root", base]),
-        ("claude", [python, str(root / "orchestrator/claude_runner.py"), "--root", base]),
-        ("codex", [python, str(root / "orchestrator/codex_runner.py"), "--root", base, "--once"]),
+        ("stage_01a", [python, str(root / "orchestrator/orchestrator.py"), "--root", base, "--state-root", str(runtime)]),
+        ("claude", [python, str(root / "orchestrator/claude_runner.py"), "--root", base, "--state-root", str(runtime)]),
+        ("codex", [python, str(root / "orchestrator/codex_runner.py"), "--root", base, "--state-root", str(runtime), "--once"]),
     ]
 
 
@@ -185,7 +188,7 @@ def run_child(paths: ControlPaths, stage: str, argv: list[str], timeout: int) ->
 
 def run_cycle(paths: ControlPaths, timeout: int = CHILD_TIMEOUT_SECONDS) -> int:
     """Run each stage once in fixed order; stop on infrastructure failure."""
-    for stage, argv in child_commands(paths.root):
+    for stage, argv in child_commands(paths.root, paths.state.parent):
         if paths.stop.exists() or paths.pause.exists():
             break
         result = run_child(paths, stage, argv, timeout)
@@ -226,7 +229,7 @@ def status(paths: ControlPaths) -> dict:
         "paused": paths.pause.exists(),
         "stop_requested": paths.stop.exists(),
         "heartbeat": heartbeat,
-        "queues": queue_counts(paths.root),
+        "queues": queue_counts(paths.state.parent),
     }
 
 
@@ -236,26 +239,30 @@ def run_daemon(paths: ControlPaths, timeout: int, idle_interval: float) -> int:
     except FileNotFoundError:
         pass
     failures = 0
+    atomic_write(paths.pid, f"{os.getpid()}\n")
     write_heartbeat(paths, state="idle", consecutive_failures=0)
-    while not paths.stop.exists():
-        if paths.pause.exists():
-            write_heartbeat(paths, state="paused", stage=None)
-            time.sleep(min(idle_interval, HEARTBEAT_INTERVAL_SECONDS))
-            continue
-        result = run_cycle(paths, timeout)
-        if result == 0:
-            failures = 0
-            delay = idle_interval
-        else:
-            failures += 1
-            delay = min(MAX_BACKOFF_SECONDS, max(idle_interval, 2 ** min(failures, 8)))
-        write_heartbeat(paths, consecutive_failures=failures, backoff_seconds=delay)
-        time.sleep(delay)
-    write_heartbeat(paths, state="stopped", stage=None)
     try:
-        paths.stop.unlink()
-    except FileNotFoundError:
-        pass
+        while not paths.stop.exists():
+            if paths.pause.exists():
+                write_heartbeat(paths, state="paused", stage=None)
+                time.sleep(min(idle_interval, HEARTBEAT_INTERVAL_SECONDS))
+                continue
+            result = run_cycle(paths, timeout)
+            if result == 0:
+                failures = 0
+                delay = idle_interval
+            else:
+                failures += 1
+                delay = min(MAX_BACKOFF_SECONDS, max(idle_interval, 2 ** min(failures, 8)))
+            write_heartbeat(paths, consecutive_failures=failures, backoff_seconds=delay)
+            time.sleep(delay)
+        write_heartbeat(paths, state="stopped", stage=None)
+    finally:
+        for marker in (paths.stop, paths.pid):
+            try:
+                marker.unlink()
+            except FileNotFoundError:
+                pass
     return 0
 
 
@@ -272,7 +279,7 @@ def run_self_test() -> int:
             raise RuntimeError("SELF_TEST_HEARTBEAT_FAILED")
         if redact("TOKEN=supersecret") != "[REDACTED]":
             raise RuntimeError("SELF_TEST_REDACTION_FAILED")
-        if [name for name, _ in child_commands(root)] != ["stage_01a", "claude", "codex"]:
+        if [name for name, _ in child_commands(root, paths.state.parent)] != ["stage_01a", "claude", "codex"]:
             raise RuntimeError("SELF_TEST_STAGE_ORDER_FAILED")
         first = acquire_supervisor_lock(paths.lock)
         try:
@@ -299,12 +306,13 @@ def main() -> int:
     actions.add_argument("--stop", action="store_true")
     actions.add_argument("--self-test", action="store_true")
     parser.add_argument("--root", default=str(DEFAULT_ROOT))
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--child-timeout", type=int, default=CHILD_TIMEOUT_SECONDS)
     parser.add_argument("--idle-interval", type=float, default=IDLE_INTERVAL_SECONDS)
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    paths = build_paths(root)
+    paths = build_paths(root, args.state_root)
 
     if args.self_test:
         return run_self_test()
