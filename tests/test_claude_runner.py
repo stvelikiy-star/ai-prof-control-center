@@ -594,6 +594,49 @@ class ClaudeRunnerTests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--bind") + 2], cr.SANDBOX_WORKSPACE)
             self.assertNotIn("--ro-bind-try", argv)
 
+    def test_bwrap_mounts_existing_elf_runtime_directories_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
+                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+            )
+            ro_binds = {
+                (argv[index + 1], argv[index + 2])
+                for index, item in enumerate(argv)
+                if item == "--ro-bind"
+            }
+            for directory in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+                if Path(directory).is_dir():
+                    self.assertIn((directory, directory), ro_binds)
+            self.assertNotIn(("/", "/"), ro_binds)
+
+    def test_bwrap_omits_missing_optional_runtime_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            present = root / "present-runtime"
+            missing = root / "missing-runtime"
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            present.mkdir()
+            workspace.mkdir()
+            scratch.mkdir()
+            with mock.patch.object(
+                cr, "RUNTIME_READONLY_DIRS", [str(present), str(missing)]
+            ):
+                argv = cr.build_bwrap_argv(
+                    Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
+                    [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                )
+            triples = list(zip(argv, argv[1:], argv[2:]))
+            self.assertIn(("--ro-bind", str(present), str(present)), triples)
+            self.assertNotIn(str(missing), argv)
+            self.assertNotIn(("--ro-bind", "/", "/"), triples)
+
     def test_bwrap_stderr_is_captured_and_secrets_and_host_paths_are_redacted(self):
         raw = (
             "bwrap: mount failed TOKEN=supersecretvalue "

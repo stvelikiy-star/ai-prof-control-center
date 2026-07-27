@@ -759,6 +759,16 @@ def _is_within_any(path: Path, roots: list[str]) -> bool:
     return False
 
 
+def _existing_runtime_readonly_dirs() -> list[str]:
+    """Return only runtime directories that Bubblewrap can mount.
+
+    Some supported hosts do not have every compatibility directory (notably
+    /lib64 or /sbin). Omitting an absent optional mount keeps setup portable
+    without weakening the fail-closed sandbox.
+    """
+    return [directory for directory in RUNTIME_READONLY_DIRS if Path(directory).is_dir()]
+
+
 def validate_project_not_exposed(project: Path, home_dir: Path | None = None) -> None:
     """Reject a target project that overlaps any path mounted into Bubblewrap."""
     project_root = project.resolve()
@@ -838,9 +848,8 @@ def build_bwrap_argv(
     argv += ["--dir", SANDBOX_HOME]
     argv += ["--dir", "/opt"]
 
-    for directory in RUNTIME_READONLY_DIRS:
-        if Path(directory).is_dir():
-            argv += ["--ro-bind", directory, directory]
+    for directory in _existing_runtime_readonly_dirs():
+        argv += ["--ro-bind", directory, directory]
     for file_path in RUNTIME_READONLY_FILES:
         if Path(file_path).is_file():
             argv += ["--ro-bind", file_path, file_path]
