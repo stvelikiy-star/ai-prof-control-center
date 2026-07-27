@@ -10,7 +10,7 @@ ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestra
 Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
 Restart=on-failure
 RestartSec=15
-NoNewPrivileges=true
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
