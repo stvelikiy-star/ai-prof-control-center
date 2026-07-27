@@ -16,7 +16,7 @@ NoNewPrivileges=false
 # has namespace hardening defaults; Bubblewrap remains the confinement
 # boundary and still drops the host filesystem with --tmpfs /.
 PrivateUsers=false
-RestrictNamespaces=yes
+RestrictNamespaces=no
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
