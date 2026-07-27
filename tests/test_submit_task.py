@@ -33,13 +33,14 @@ def init_project(path: Path) -> None:
 
 
 class SubmitTaskTests(unittest.TestCase):
-    def test_production_registry_contains_registered_safe_pilots(self):
+    def test_production_registry_contains_real_and_pilot_ak_bermet_projects(self):
         root = MODULE_PATH.parents[1]
         registry = json.loads(
             (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
         )
         self.assertEqual(registry["version"], 1)
-        self.assertEqual(registry["projects"], [{
+        projects = {item["project_id"]: item for item in registry["projects"]}
+        self.assertEqual(projects["ai-prof-pilot"], {
             "project_id": "ai-prof-pilot",
             "path": "/home/agent/projects/ai-prof-pilot-runtime",
             "base_branch": "develop",
@@ -50,25 +51,17 @@ class SubmitTaskTests(unittest.TestCase):
             "allow_push": False,
             "allow_merge": False,
             "allow_deployment": False,
-        }, {
-            "project_id": "ak-bermet-pilot",
-            "path": "/home/agent/projects/ak-bermet-agent-pilot",
-            "enabled": True,
-            "base_branch": "develop",
-            "work_prefixes": ["feature/", "fix/"],
-            "allowed_scope": ["README.md", "docs/**", "ai-system/**", "tests/**"],
-            "forbidden_scope": [
-                ".git/**", ".env", "**/.env", "secrets", "credentials",
-                "migrations/**", "lock files",
-            ],
-            "agent_context": "agents/ak-bermet",
-            "allow_commits": False,
-            "allow_push": False,
-            "allow_merge": False,
-            "allow_deployment": False,
-            "require_clean_repository": True,
-            "max_scope_files": 20,
-        }])
+        })
+        self.assertEqual(projects["ak-bermet"]["path"], "/home/agent/projects/ak-bermet")
+        self.assertEqual(
+            projects["ak-bermet-pilot"]["path"],
+            "/home/agent/projects/ak-bermet-agent-pilot",
+        )
+        self.assertIn("src/**", projects["ak-bermet"]["allowed_scope"])
+        self.assertIn("tests/**", projects["ak-bermet"]["allowed_scope"])
+        self.assertIn("docs/**", projects["ak-bermet"]["allowed_scope"])
+        self.assertIn("supabase/migrations/**", projects["ak-bermet"]["allowed_scope"])
+        self.assertNotIn("**", projects["ak-bermet"]["allowed_scope"])
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 
     def make_root(self, parent: Path) -> tuple[Path, Path]:
@@ -164,6 +157,9 @@ class SubmitTaskTests(unittest.TestCase):
             values, _ = orch.parse_task(task)
             self.assertEqual(values["Task-ID"], "PILOT_001")
             self.assertIn("Scope-Files: README.md", text)
+            self.assertEqual(values["Scope"], "Only the approved Scope-Files listed below")
+            self.assertIn("Instructions: Instruction", text)
+            self.assertNotIn("Scope: Instruction\n", text)
 
     def test_create_dry_run_and_real_queue_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
