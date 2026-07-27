@@ -33,7 +33,7 @@ def init_project(path: Path) -> None:
 
 
 class SubmitTaskTests(unittest.TestCase):
-    def test_production_registry_contains_only_safe_pilot(self):
+    def test_production_registry_contains_registered_safe_pilots(self):
         root = MODULE_PATH.parents[1]
         registry = json.loads(
             (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
@@ -50,6 +50,24 @@ class SubmitTaskTests(unittest.TestCase):
             "allow_push": False,
             "allow_merge": False,
             "allow_deployment": False,
+        }, {
+            "project_id": "ak-bermet-pilot",
+            "path": "/home/agent/projects/ak-bermet-agent-pilot",
+            "enabled": True,
+            "base_branch": "develop",
+            "work_prefixes": ["feature/", "fix/"],
+            "allowed_scope": ["README.md", "docs/**", "ai-system/**", "tests/**"],
+            "forbidden_scope": [
+                ".git/**", ".env", "**/.env", "secrets", "credentials",
+                "migrations/**", "lock files",
+            ],
+            "agent_context": "agents/ak-bermet",
+            "allow_commits": False,
+            "allow_push": False,
+            "allow_merge": False,
+            "allow_deployment": False,
+            "require_clean_repository": True,
+            "max_scope_files": 20,
         }])
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 

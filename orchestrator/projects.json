@@ -19,6 +19,38 @@
       "allow_push": false,
       "allow_merge": false,
       "allow_deployment": false
+    },
+    {
+      "project_id": "ak-bermet-pilot",
+      "path": "/home/agent/projects/ak-bermet-agent-pilot",
+      "enabled": true,
+      "base_branch": "develop",
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "ai-system/**",
+        "tests/**"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "migrations/**",
+        "lock files"
+      ],
+      "agent_context": "agents/ak-bermet",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20
     }
   ]
 }
