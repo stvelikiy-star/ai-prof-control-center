@@ -55,33 +55,68 @@ class OperationsRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo, profile = self.make_repo(Path(tmp))
             with self.assertRaises(operations.OperationBlocked):
-                operations.validate_repository(profile, str(repo) + "/.")
+                operations.validate_repository(profile, str(repo) + "/.", {})
             (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
             with self.assertRaises(operations.OperationBlocked):
-                operations.validate_repository(profile, str(repo))
+                operations.validate_repository(profile, str(repo), {})
 
     def test_subprocess_boundary_always_uses_shell_false(self):
         with (
-            mock.patch.dict(
-                operations.os.environ,
-                {
-                    "NODE_OPTIONS": "--require=/tmp/injected.js",
-                    "npm_config_script_shell": "/tmp/evil",
-                    "SUPABASE_ACCESS_TOKEN": "required-token",
-                },
-                clear=True,
-            ),
             mock.patch.object(
                 operations.subprocess, "run", return_value=completed(["git"]),
             ) as run,
         ):
-            operations.run_argv(["git", "status"], Path("/tmp"))
+            environment = {"PATH": "/nvm/bin:/usr/bin:/bin"}
+            operations.run_argv(["git", "status"], Path("/tmp"), environment)
         self.assertIs(run.call_args.kwargs["shell"], False)
         self.assertEqual(run.call_args.args[0], ["git", "status"])
-        child_env = run.call_args.kwargs["env"]
-        self.assertEqual(child_env["SUPABASE_ACCESS_TOKEN"], "required-token")
-        self.assertNotIn("NODE_OPTIONS", child_env)
-        self.assertNotIn("npm_config_script_shell", child_env)
+        self.assertIs(run.call_args.kwargs["env"], environment)
+
+    def test_missing_path_supabase_receives_newest_nvm_node_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            versions = Path(tmp) / "versions"
+            for version in ("v20.9.0", "v20.10.0", "v18.20.5"):
+                node = versions / version / "bin/node"
+                node.parent.mkdir(parents=True)
+                node.write_text("#!/bin/sh\n", encoding="utf-8")
+                node.chmod(0o755)
+            with (
+                mock.patch.object(operations, "NVM_NODE_VERSIONS", versions),
+                mock.patch.dict(
+                    operations.os.environ,
+                    {
+                        "PATH": "/usr/bin:/bin",
+                        "SERVICE_MARKER": "copied",
+                        "NODE_OPTIONS": "--require=/tmp/injected.js",
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(
+                    operations.subprocess, "run", return_value=completed(["supabase"]),
+                ) as run,
+            ):
+                node_bin = operations.locate_node_bin()
+                environment = operations.operation_environment(node_bin)
+                operations.run_argv(
+                    ["/repo/node_modules/.bin/supabase", "--version"],
+                    Path("/repo"),
+                    environment,
+                )
+            self.assertEqual(node_bin, versions / "v20.10.0/bin")
+            self.assertEqual(
+                run.call_args.kwargs["env"]["PATH"],
+                f"{versions / 'v20.10.0/bin'}:/usr/bin:/bin",
+            )
+            self.assertEqual(run.call_args.kwargs["env"]["SERVICE_MARKER"], "copied")
+            self.assertNotIn("NODE_OPTIONS", run.call_args.kwargs["env"])
+
+    def test_missing_node_runtime_has_concise_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(operations, "NVM_NODE_VERSIONS", Path(tmp)):
+                with self.assertRaisesRegex(
+                    operations.OperationBlocked, "^NODE_RUNTIME_NOT_FOUND$",
+                ):
+                    operations.locate_node_bin()
 
     def test_secret_redaction(self):
         raw = (
@@ -100,6 +135,7 @@ class OperationsRunnerTests(unittest.TestCase):
                 completed([], "20260727000100_x.sql\n20260727000200_other.sql\n"),
             ]
             with (
+                mock.patch.object(operations, "locate_node_bin", return_value=Path("/")),
                 mock.patch.object(operations, "validate_repository", return_value=repo),
                 mock.patch.object(operations, "locate_toolchain", return_value=self.tools(repo)),
                 mock.patch.object(operations, "run_argv", side_effect=outputs),
@@ -113,13 +149,14 @@ class OperationsRunnerTests(unittest.TestCase):
             listing = "Local | Remote\n20260727000100 | 20260727000100\n"
             calls: list[list[str]] = []
 
-            def fake_run(argv, _repository, **_kwargs):
+            def fake_run(argv, _repository, _environment, **_kwargs):
                 calls.append(argv)
                 if argv[1].endswith("supabase"):
                     return completed(argv, listing)
                 return completed(argv)
 
             with (
+                mock.patch.object(operations, "locate_node_bin", return_value=Path("/")),
                 mock.patch.object(operations, "validate_repository", return_value=repo),
                 mock.patch.object(operations, "locate_toolchain", return_value=self.tools(repo)),
                 mock.patch.object(operations, "run_argv", side_effect=fake_run),
@@ -138,7 +175,7 @@ class OperationsRunnerTests(unittest.TestCase):
                 "Local | Remote\n20260727000100 | 20260727000100\n",
             ])
 
-            def fake_run(argv, _repository, **_kwargs):
+            def fake_run(argv, _repository, _environment, **_kwargs):
                 calls.append(argv)
                 if "migration" in argv and "list" in argv:
                     return completed(argv, next(listings))
@@ -147,6 +184,7 @@ class OperationsRunnerTests(unittest.TestCase):
                 return completed(argv)
 
             with (
+                mock.patch.object(operations, "locate_node_bin", return_value=Path("/")),
                 mock.patch.object(operations, "validate_repository", return_value=repo),
                 mock.patch.object(operations, "locate_toolchain", return_value=self.tools(repo)),
                 mock.patch.object(operations, "run_argv", side_effect=fake_run),
