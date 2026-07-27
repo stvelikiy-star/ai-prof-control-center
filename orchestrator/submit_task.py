@@ -181,6 +181,19 @@ def render_task(
     work_branch: str, scope: list[str], execution_mode: str = "code",
     operation_profile: str = "none",
 ) -> str:
+    required_commands = project.get("code_required_commands", ["git", "python3"])
+    required_checks = project.get("code_required_checks", [])
+    if not isinstance(required_commands, list) or not all(
+        isinstance(command, str) and command for command in required_commands
+    ):
+        raise IntakeError("invalid project code_required_commands")
+    if not isinstance(required_checks, list) or not all(
+        isinstance(check, str) and check for check in required_checks
+    ):
+        raise IntakeError("invalid project code_required_checks")
+    if execution_mode != "code":
+        required_commands = ["git", "python3"]
+        required_checks = []
     values = [
         ("Task-ID", task_id),
         ("Execution-Mode", execution_mode),
@@ -194,8 +207,8 @@ def render_task(
         ("Scope", "Only the approved Scope-Files listed below"),
         ("Out-of-Scope", "All files outside Scope-Files; commit, push, merge, deployment"),
         ("Pass-Criteria", "Requested change is complete and all required checks pass"),
-        ("Required-Checks", "none"),
-        ("Required-Commands", "git, python3"),
+        ("Required-Checks", ", ".join(required_checks) if required_checks else "none"),
+        ("Required-Commands", ", ".join(required_commands)),
         ("Required-Environment", "none"),
         ("Owner-Approval-Required", "yes"),
         ("Scope-Files", ", ".join(scope)),

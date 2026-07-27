@@ -61,7 +61,21 @@
       "allow_merge": false,
       "allow_deployment": false,
       "require_clean_repository": true,
-      "max_scope_files": 20
+      "max_scope_files": 20,
+      "code_required_commands": [
+        "git",
+        "python3",
+        "node",
+        "npm",
+        "npx"
+      ],
+      "code_required_checks": [
+        "npm run lint",
+        "npx tsc --noEmit",
+        "npm test",
+        "npm run build"
+      ],
+      "code_toolchain": "nvm-node"
     },
     {
       "project_id": "ak-bermet-pilot",

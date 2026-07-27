@@ -62,6 +62,31 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertIn("docs/**", projects["ak-bermet"]["allowed_scope"])
         self.assertIn("supabase/migrations/**", projects["ak-bermet"]["allowed_scope"])
         self.assertNotIn("**", projects["ak-bermet"]["allowed_scope"])
+        self.assertEqual(
+            projects["ak-bermet"]["code_required_commands"],
+            ["git", "python3", "node", "npm", "npx"],
+        )
+        self.assertEqual(projects["ak-bermet"]["code_toolchain"], "nvm-node")
+
+    def test_ak_bermet_task_metadata_declares_node_toolchain_and_checks(self):
+        project = {
+            "path": "/home/agent/projects/ak-bermet",
+            "base_branch": "develop",
+            "agent_context": "agents/ak-bermet",
+            "code_required_commands": ["git", "python3", "node", "npm", "npx"],
+            "code_required_checks": [
+                "npm run lint", "npx tsc --noEmit", "npm test", "npm run build",
+            ],
+        }
+        text = submit.render_task(
+            project, "AK_BERMET_TEST", "Fix", "Fix safely",
+            "fix/test", ["src"],
+        )
+        self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
+        self.assertIn(
+            "Required-Checks: npm run lint, npx tsc --noEmit, npm test, npm run build",
+            text,
+        )
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 
     def make_root(self, parent: Path) -> tuple[Path, Path]:

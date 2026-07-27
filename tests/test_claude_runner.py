@@ -542,6 +542,69 @@ class ClaudeRunnerTests(unittest.TestCase):
                 self.assertNotIn("--dangerously-skip-permissions", called_argv)
                 self.assertNotIn("cwd", run_mock.call_args.kwargs)
 
+    def test_ak_bermet_nvm_toolchain_is_read_only_and_on_sandbox_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            versions = root / "versions"
+            node_root = versions / "v24.18.0"
+            (node_root / "bin").mkdir(parents=True)
+            (node_root / "lib/node_modules/npm/bin").mkdir(parents=True)
+            for name in ("node",):
+                command = node_root / "bin" / name
+                command.write_text("#!/bin/sh\nexit 0\n")
+                command.chmod(0o755)
+            for name in ("npm", "npx"):
+                target = node_root / "lib/node_modules/npm/bin" / f"{name}-cli.js"
+                target.write_text("#!/bin/sh\nexit 0\n")
+                target.chmod(0o755)
+                (node_root / "bin" / name).symlink_to(
+                    Path("../lib/node_modules/npm/bin") / f"{name}-cli.js"
+                )
+            toolchain = cr.locate_nvm_node_toolchain(versions)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
+                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+                node_toolchain=toolchain,
+            )
+            pairs = list(zip(argv, argv[1:]))
+            self.assertIn((str(node_root.resolve()), cr.SANDBOX_NODE_ROOT), pairs)
+            path_index = argv.index("PATH")
+            self.assertTrue(argv[path_index + 1].startswith(f"{cr.SANDBOX_NODE_ROOT}/bin:"))
+            self.assertNotIn(str(versions), argv[path_index + 1])
+            self.assertIn("--unshare-all", argv)
+            self.assertIn("--bind", argv)
+
+    def test_ordinary_code_sandbox_does_not_mount_nvm_or_lose_isolation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            scratch = root / "scratch"
+            workspace.mkdir()
+            scratch.mkdir()
+            argv = cr.build_bwrap_argv(
+                Path(cr.BWRAP_CLI), Path(sys.executable), workspace, scratch,
+                [sys.executable], home_dir=root / "empty-home", auth_env=[],
+            )
+            self.assertNotIn(cr.SANDBOX_NODE_ROOT, argv)
+            self.assertIn("--unshare-all", argv)
+            self.assertEqual(argv[argv.index("--bind") + 2], cr.SANDBOX_WORKSPACE)
+            self.assertNotIn("--ro-bind-try", argv)
+
+    def test_bwrap_stderr_is_captured_and_secrets_and_host_paths_are_redacted(self):
+        raw = (
+            "bwrap: mount failed TOKEN=supersecretvalue "
+            "/home/agent/.claude file:///home/agent/private\n"
+        )
+        clean = cr.sanitize_sandbox_stderr(raw, home_dir=Path("/home/agent"))
+        self.assertIn("bwrap: mount failed", clean)
+        self.assertNotIn("supersecretvalue", clean)
+        self.assertNotIn("/home/agent", clean)
+        self.assertIn("[REDACTED]", clean)
+
     # =========================================================================
     # Blocker 3: isolated workspace and approved-scope enforcement.
     # =========================================================================
