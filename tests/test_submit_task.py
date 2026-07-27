@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "orchestrator" / "submit_task.py"
+SPEC = importlib.util.spec_from_file_location("ai_prof_submit_task", MODULE_PATH)
+submit = importlib.util.module_from_spec(SPEC)
+if SPEC.loader is None:
+    raise RuntimeError("Cannot load submit_task")
+sys.modules[SPEC.name] = submit
+SPEC.loader.exec_module(submit)
+
+
+def init_project(path: Path) -> None:
+    path.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "develop"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    (path / "README.md").write_text("pilot\n", encoding="utf-8")
+    (path / "docs").mkdir()
+    (path / "tests").mkdir()
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=path, check=True)
+
+
+class SubmitTaskTests(unittest.TestCase):
+    def make_root(self, parent: Path) -> tuple[Path, Path]:
+        root = parent / "control"
+        project = parent / "pilot"
+        root.mkdir()
+        init_project(project)
+        (root / "orchestrator").mkdir()
+        context = root / "agents/pilot"
+        context.mkdir(parents=True)
+        registry = {
+            "version": 1,
+            "projects": [{
+                "project_id": "pilot",
+                "path": str(project),
+                "base_branch": "develop",
+                "work_prefixes": ["feature/", "fix/"],
+                "allowed_scope": ["README.md", "docs/**", "tests/**"],
+                "agent_context": "agents/pilot",
+                "allow_commits": False,
+                "allow_push": False,
+                "allow_merge": False,
+                "allow_deployment": False,
+            }],
+        }
+        (root / "orchestrator/projects.json").write_text(
+            json.dumps(registry), encoding="utf-8",
+        )
+        return root, project
+
+    def test_registry_validates_and_disables_all_release_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            projects = submit.read_registry(root)
+            self.assertEqual(set(projects), {"pilot"})
+            item = projects["pilot"]
+            for key in ("allow_commits", "allow_push", "allow_merge", "allow_deployment"):
+                self.assertIs(item[key], False)
+
+    def test_scope_security_rejections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, project = self.make_root(Path(tmp))
+            outside = Path(tmp) / "outside"
+            outside.write_text("x", encoding="utf-8")
+            (project / "docs/link").symlink_to(outside)
+            fifo = project / "tests/fifo"
+            os.mkfifo(fifo)
+            bad = [
+                "../README.md", "/etc/passwd", r"docs\file.md", "docs/../README.md",
+                "docs/link", "tests/fifo", "other.txt", "docs/missing/file.md",
+                "docs/\x00bad",
+            ]
+            for value in bad:
+                with self.subTest(value=value), self.assertRaises(submit.IntakeError):
+                    submit.validate_scope_path(
+                        project, value, ["README.md", "docs/**", "tests/**"],
+                    )
+
+    def test_scope_limits_and_text_limits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, project = self.make_root(Path(tmp))
+            with self.assertRaises(submit.IntakeError):
+                submit.validate_scope(
+                    project, ["README.md"] * (submit.SCOPE_COUNT_LIMIT + 1), ["README.md"],
+                )
+            with self.assertRaises(submit.IntakeError):
+                submit.validate_text("title", "x" * 121, submit.TITLE_LIMIT)
+            with self.assertRaises(submit.IntakeError):
+                submit.validate_text("instructions", "line1\nline2", submit.INSTRUCTION_LIMIT)
+
+    def test_atomic_create_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "pending/TASK_001.md"
+            submit.atomic_create(destination, "first")
+            with self.assertRaises(submit.IntakeError):
+                submit.atomic_create(destination, "second")
+            self.assertEqual(destination.read_text(encoding="utf-8"), "first")
+
+    def test_rendered_task_is_stage_01a_schema_compatible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, project = self.make_root(Path(tmp))
+            item = submit.read_registry(root)["pilot"]
+            text = submit.render_task(
+                item, "PILOT_001", "Title", "Instruction", "feature/task", ["README.md"],
+            )
+            task = root / "task.md"
+            task.write_text(text, encoding="utf-8")
+            orchestrator_path = MODULE_PATH.parent / "orchestrator.py"
+            spec = importlib.util.spec_from_file_location("intake_test_orch", orchestrator_path)
+            orch = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = orch
+            spec.loader.exec_module(orch)
+            values, _ = orch.parse_task(task)
+            self.assertEqual(values["Task-ID"], "PILOT_001")
+            self.assertIn("Scope-Files: README.md", text)
+
+    def test_create_dry_run_and_real_queue_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            base = [
+                "submit_task.py", "--root", str(root), "--json", "create",
+                "--project", "pilot", "--title", "Title",
+                "--instructions", "Instruction", "--work-branch", "feature/task",
+                "--scope", "README.md",
+            ]
+            with mock.patch.object(sys, "argv", base + ["--dry-run"]):
+                self.assertEqual(submit.main(), 0)
+            self.assertFalse((root / "queue/pending").exists())
+            with mock.patch.object(sys, "argv", base):
+                self.assertEqual(submit.main(), 0)
+            tasks = list((root / "queue/pending").glob("*.md"))
+            self.assertEqual(len(tasks), 1)
+
+    def test_list_show_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            task_id = "PILOT_TASK_001"
+            path = root / "queue/pending" / f"{task_id}.md"
+            submit.atomic_create(path, f"Task-ID: {task_id}\n")
+            self.assertEqual(submit.list_tasks(root), [{"task_id": task_id, "queue": "pending"}])
+            queue, found = submit.locate_task(root, task_id)
+            self.assertEqual((queue, found), ("pending", path))
+            submit.move_cancel(root, task_id)
+            self.assertTrue((root / "queue/cancelled" / path.name).exists())
+
+    def test_self_test(self):
+        self.assertEqual(submit.run_self_test(), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
