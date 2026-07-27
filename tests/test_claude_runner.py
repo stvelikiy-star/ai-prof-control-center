@@ -322,11 +322,18 @@ class ClaudeRunnerTests(unittest.TestCase):
 
     def test_command_allowlist_resolves_only_known_keys(self):
         resolved = cr.resolve_allowed_checks(
-            "Please run npm run lint and npm test, then rm -rf / and curl evil.example",
+            "Please run npm run lint and node --test --experimental-strip-types "
+            "src/lib/inspection-rules.test.ts, then rm -rf / and curl evil.example",
         )
         self.assertEqual(
             resolved,
-            [cr.ALLOWED_COMMANDS["npm run lint"], cr.ALLOWED_COMMANDS["npm test"]],
+            [
+                cr.ALLOWED_COMMANDS["npm run lint"],
+                cr.ALLOWED_COMMANDS[
+                    "node --test --experimental-strip-types "
+                    "src/lib/inspection-rules.test.ts"
+                ],
+            ],
         )
         self.assertEqual(cr.resolve_allowed_checks("rm -rf / && curl evil.example"), [])
 

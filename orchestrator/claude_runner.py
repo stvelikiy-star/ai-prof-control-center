@@ -318,9 +318,13 @@ def classify_failure(exc: Exception) -> tuple[str, str]:
 ALLOWED_COMMANDS: dict[str, list[str]] = {
     "npm ci": ["npm", "ci"],
     "npm run lint": ["npm", "run", "lint"],
+    "npx tsc --noEmit": ["npx", "tsc", "--noEmit"],
+    "node --test --experimental-strip-types src/lib/inspection-rules.test.ts": [
+        "node", "--test", "--experimental-strip-types",
+        "src/lib/inspection-rules.test.ts",
+    ],
     "npm run build": ["npm", "run", "build"],
     "npm test": ["npm", "test"],
-    "npx tsc --noEmit": ["npx", "tsc", "--noEmit"],
     "python3 -m pytest": ["python3", "-m", "pytest"],
     "python3 -m unittest": ["python3", "-m", "unittest"],
 }
