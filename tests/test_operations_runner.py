@@ -61,12 +61,27 @@ class OperationsRunnerTests(unittest.TestCase):
                 operations.validate_repository(profile, str(repo))
 
     def test_subprocess_boundary_always_uses_shell_false(self):
-        with mock.patch.object(
-            operations.subprocess, "run", return_value=completed(["git"]),
-        ) as run:
+        with (
+            mock.patch.dict(
+                operations.os.environ,
+                {
+                    "NODE_OPTIONS": "--require=/tmp/injected.js",
+                    "npm_config_script_shell": "/tmp/evil",
+                    "SUPABASE_ACCESS_TOKEN": "required-token",
+                },
+                clear=True,
+            ),
+            mock.patch.object(
+                operations.subprocess, "run", return_value=completed(["git"]),
+            ) as run,
+        ):
             operations.run_argv(["git", "status"], Path("/tmp"))
         self.assertIs(run.call_args.kwargs["shell"], False)
         self.assertEqual(run.call_args.args[0], ["git", "status"])
+        child_env = run.call_args.kwargs["env"]
+        self.assertEqual(child_env["SUPABASE_ACCESS_TOKEN"], "required-token")
+        self.assertNotIn("NODE_OPTIONS", child_env)
+        self.assertNotIn("npm_config_script_shell", child_env)
 
     def test_secret_redaction(self):
         raw = (

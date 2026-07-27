@@ -47,6 +47,15 @@ SECRET_PATTERNS = (
     re.compile(r"\b(?:sk|sbp)_[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?\b"),
 )
+ALLOWED_ENVIRONMENT = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "SUPABASE_ACCESS_TOKEN",
+    "SUPABASE_DB_PASSWORD",
+)
 
 
 class OperationBlocked(RuntimeError):
@@ -72,6 +81,21 @@ def redact(text: str) -> str:
     return orch.redact(safe)
 
 
+def operation_environment() -> dict[str, str]:
+    """Build a minimal environment that cannot inject code into Node/npm.
+
+    Supabase authentication remains available, but ambient Node, npm, shell,
+    proxy, and Git configuration variables are deliberately not inherited.
+    """
+    environment = {
+        name: os.environ[name]
+        for name in ALLOWED_ENVIRONMENT
+        if name in os.environ
+    }
+    environment["PATH"] = "/usr/bin:/bin"
+    return environment
+
+
 def run_argv(
     argv: list[str], repository: Path, *, timeout: int = COMMAND_TIMEOUT_SECONDS,
     retry_transient: bool = False,
@@ -88,6 +112,7 @@ def run_argv(
                 capture_output=True,
                 timeout=timeout,
                 shell=False,
+                env=operation_environment(),
             )
         except subprocess.TimeoutExpired as exc:
             if retry_transient and attempt + 1 < attempts:
