@@ -66,6 +66,8 @@ SANDBOX_WORKSPACE = "/workspace"
 SANDBOX_SCRATCH = "/run/ai-prof/scratch"
 SANDBOX_CLAUDE = "/run/ai-prof/claude"
 SANDBOX_HOME = "/home/claude"
+SANDBOX_NODE_ROOT = "/opt/ai-prof-node"
+NVM_NODE_VERSIONS = Path("/home/agent/.nvm/versions/node")
 
 # The PATH visible *inside* the sandbox. Deliberately unrelated to whatever
 # PATH this orchestrator process itself was started with.
@@ -237,6 +239,52 @@ class ClaudeExecutionError(RuntimeError):
     status_code = "CLAUDE_FAILED"
 
 
+@dataclass(frozen=True)
+class NodeToolchain:
+    """One validated NVM Node installation exposed read-only to Bubblewrap."""
+
+    root: Path
+
+    @property
+    def bin(self) -> Path:
+        return self.root / "bin"
+
+
+def _node_version_key(path: Path) -> tuple[int, ...]:
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", path.name)
+    return tuple(map(int, match.groups())) if match else ()
+
+
+def locate_nvm_node_toolchain(versions_root: Path = NVM_NODE_VERSIONS) -> NodeToolchain:
+    """Select the newest complete NVM Node install without trusting service PATH."""
+    try:
+        candidates = sorted(
+            (path for path in versions_root.iterdir() if path.is_dir() and _node_version_key(path)),
+            key=_node_version_key,
+            reverse=True,
+        )
+    except OSError as exc:
+        raise EnvironmentAccessError(
+            f"BLOCKED_ENVIRONMENT_ACCESS: cannot inspect NVM Node versions: {exc}"
+        ) from exc
+    for root in candidates:
+        valid = True
+        for name in ("node", "npm", "npx"):
+            command = root / "bin" / name
+            try:
+                resolved = command.resolve(strict=True)
+                resolved.relative_to(root.resolve())
+                if not resolved.is_file() or not os.access(resolved, os.X_OK):
+                    valid = False
+            except (OSError, ValueError):
+                valid = False
+        if valid:
+            return NodeToolchain(root.resolve())
+    raise EnvironmentAccessError(
+        f"BLOCKED_ENVIRONMENT_ACCESS: no complete node/npm/npx toolchain under {versions_root}"
+    )
+
+
 def classify_failure(exc: Exception) -> tuple[str, str]:
     """Map an exception to (queue_name, status_code).
 
@@ -341,8 +389,13 @@ def resolve_allowed_checks(required_checks: str) -> list[list[str]]:
     return [argv for key, argv in ALLOWED_COMMANDS.items() if key.lower() in lowered]
 
 
-def run_allowed_checks(argvs: list[list[str]], project: Path) -> list[str]:
+def run_allowed_checks(
+    argvs: list[list[str]], project: Path, node_toolchain: NodeToolchain | None = None,
+) -> list[str]:
     executed: list[str] = []
+    check_env = os.environ.copy()
+    if node_toolchain is not None:
+        check_env["PATH"] = f"{node_toolchain.bin}:{check_env.get('PATH', SANDBOX_PATH_ENV)}"
     for argv in argvs:
         result = subprocess.run(
             argv,
@@ -350,6 +403,7 @@ def run_allowed_checks(argvs: list[list[str]], project: Path) -> list[str]:
             text=True,
             capture_output=True,
             timeout=CHECK_TIMEOUT_SECONDS,
+            env=check_env,
         )
         executed.append(" ".join(argv))
         if result.returncode != 0:
@@ -741,6 +795,7 @@ def build_bwrap_argv(
     claude_argv: list[str],
     home_dir: Path | None = None,
     auth_env: list[tuple[str, str]] | None = None,
+    node_toolchain: NodeToolchain | None = None,
 ) -> list[str]:
     """Build the fixed Bubblewrap argv that confines the Claude subprocess.
 
@@ -766,7 +821,10 @@ def build_bwrap_argv(
     argv += ["--die-with-parent", "--new-session"]
     argv += ["--clearenv"]
     argv += ["--setenv", "HOME", SANDBOX_HOME]
-    argv += ["--setenv", "PATH", SANDBOX_PATH_ENV]
+    sandbox_path = SANDBOX_PATH_ENV
+    if node_toolchain is not None:
+        sandbox_path = f"{SANDBOX_NODE_ROOT}/bin:{sandbox_path}"
+    argv += ["--setenv", "PATH", sandbox_path]
     for name, value in auth_env or []:
         argv += ["--setenv", name, value]
 
@@ -778,6 +836,7 @@ def build_bwrap_argv(
     argv += ["--dir", "/run/ai-prof"]
     argv += ["--dir", "/home"]
     argv += ["--dir", SANDBOX_HOME]
+    argv += ["--dir", "/opt"]
 
     for directory in RUNTIME_READONLY_DIRS:
         if Path(directory).is_dir():
@@ -785,6 +844,8 @@ def build_bwrap_argv(
     for file_path in RUNTIME_READONLY_FILES:
         if Path(file_path).is_file():
             argv += ["--ro-bind", file_path, file_path]
+    if node_toolchain is not None:
+        argv += ["--ro-bind", str(node_toolchain.root), SANDBOX_NODE_ROOT]
     if not _is_within_any(claude_real_path, RUNTIME_READONLY_DIRS):
         argv += ["--ro-bind", str(claude_real_path), SANDBOX_CLAUDE]
         claude_argv = [SANDBOX_CLAUDE, *claude_argv[1:]]
@@ -804,7 +865,45 @@ def build_bwrap_argv(
     return argv
 
 
-def invoke_claude(bundle: str, workspace: Path, mcp_config_path: Path) -> subprocess.CompletedProcess:
+def sanitize_sandbox_stderr(stderr: str, *, home_dir: Path | None = None) -> str:
+    """Retain useful bwrap diagnostics while removing secrets and host paths."""
+    detail = orch.redact((stderr or "").strip())
+    host_home = str((home_dir or Path.home()).resolve())
+    detail = detail.replace(host_home, "$HOME")
+    detail = re.sub(r"file:///[^\s>]+", "file:///[HOST_PATH_REDACTED]", detail)
+    return detail[:2000]
+
+
+def validate_code_task_access(
+    data: dict[str, str], node_toolchain: NodeToolchain | None,
+) -> None:
+    """Validate declared commands against the actual service-visible toolchain."""
+    node_commands = {"node", "npm", "npx"} if node_toolchain is not None else set()
+    missing = [
+        command for command in orch.split_csv(data["Required-Commands"])
+        if command not in node_commands and shutil.which(command) is None
+    ]
+    if missing:
+        raise EnvironmentAccessError(
+            "BLOCKED_ENVIRONMENT_ACCESS: BLOCKED_MISSING_COMMANDS: " + ", ".join(missing)
+        )
+    missing_env = [
+        name for name in orch.split_csv(data["Required-Environment"])
+        if not os.environ.get(name)
+    ]
+    if missing_env:
+        raise EnvironmentAccessError(
+            "BLOCKED_ENVIRONMENT_ACCESS: BLOCKED_MISSING_ENVIRONMENT: " + ", ".join(missing_env)
+        )
+
+
+def invoke_claude(
+    bundle: str,
+    workspace: Path,
+    mcp_config_path: Path,
+    *,
+    node_toolchain: NodeToolchain | None = None,
+) -> subprocess.CompletedProcess:
     """Run Claude fully confined inside a real Bubblewrap sandbox.
 
     Bubblewrap and Claude availability are checked, and the Claude policy
@@ -829,6 +928,7 @@ def invoke_claude(bundle: str, workspace: Path, mcp_config_path: Path) -> subpro
         scratch_dir=mcp_config_path.resolve().parent,
         claude_argv=exec_argv,
         auth_env=_claude_auth_env_pairs(),
+        node_toolchain=node_toolchain,
     )
 
     try:
@@ -856,7 +956,7 @@ def invoke_claude(bundle: str, workspace: Path, mcp_config_path: Path) -> subpro
         # infrastructure failure, never a Claude execution failure.
         raise SandboxSetupError(
             "BLOCKED_SANDBOX_SETUP: bubblewrap failed to establish the sandbox: "
-            f"{(result.stderr or '')[:300]}"
+            f"{sanitize_sandbox_stderr(result.stderr or '')}"
         )
     return result
 
@@ -1424,10 +1524,10 @@ def process_one(paths: ClaudePaths) -> int:
 
         check_project_accessible(project)
 
-        try:
-            orch.validate_access(data)
-        except RuntimeError as exc:
-            raise EnvironmentAccessError(f"BLOCKED_ENVIRONMENT_ACCESS: {exc}") from exc
+        node_toolchain = None
+        if project == Path("/home/agent/projects/ak-bermet"):
+            node_toolchain = locate_nvm_node_toolchain()
+        validate_code_task_access(data, node_toolchain)
 
         if not orch.is_valid_work_branch(data["Work-Branch"]):
             raise InvalidBranchNameError("BLOCKED_INVALID_BRANCH: invalid work branch")
@@ -1476,7 +1576,12 @@ def process_one(paths: ClaudePaths) -> int:
             mcp_config_path = build_claude_mcp_config(scratch_dir)
 
             bundle = build_claude_bundle(task_text, context)
-            result = invoke_claude(bundle, workspace_dir, mcp_config_path)
+            if node_toolchain is None:
+                result = invoke_claude(bundle, workspace_dir, mcp_config_path)
+            else:
+                result = invoke_claude(
+                    bundle, workspace_dir, mcp_config_path, node_toolchain=node_toolchain,
+                )
             if result.returncode != 0:
                 detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()[:500]
                 if is_claude_auth_failure(detail):
@@ -1499,7 +1604,7 @@ def process_one(paths: ClaudePaths) -> int:
         applied_changes = apply_validated_changes(project, change_set, scope_entries)
 
         executed_checks = run_allowed_checks(
-            resolve_allowed_checks(data["Required-Checks"]), project,
+            resolve_allowed_checks(data["Required-Checks"]), project, node_toolchain,
         )
 
         summary = "\n".join([
