@@ -1,0 +1,21 @@
+[Unit]
+Description=AI PROF Telegram control bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/telegram_bridge.py
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/agent/.config/ai-prof-control-center
+ReadWritePaths=/home/agent/.local/state/ai-prof-control-center
+UMask=0077
+
+[Install]
+WantedBy=default.target
