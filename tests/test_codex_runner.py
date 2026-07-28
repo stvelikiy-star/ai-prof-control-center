@@ -148,6 +148,101 @@ class CodexRunnerTests(unittest.TestCase):
                     self.assertEqual(cx.process_one(paths, codex), 1)
                 self.assertTrue((paths.blocked / "task.md").exists())
 
+    def test_first_launch_fails_second_succeeds_and_task_moves_once(self):
+        with tempfile.TemporaryDirectory() as cc, tempfile.TemporaryDirectory() as parent:
+            root = Path(cc)
+            project = Path(parent) / "project"
+            paths, codex = self.setup_cycle(root, project)
+            results = [
+                SimpleNamespace(returncode=1, stdout="", stderr="temporary service failure"),
+                SimpleNamespace(returncode=0, stdout="# PASS\nok", stderr=""),
+            ]
+            delays = []
+            with mock.patch.object(cx, "invoke_codex", side_effect=results) as invoke:
+                self.assertEqual(cx.process_one(paths, codex, sleep_fn=delays.append), 0)
+            self.assertEqual(invoke.call_count, 2)
+            self.assertEqual(delays, [cx.CODEX_RETRY_DELAYS_SECONDS[0]])
+            self.assertEqual([path.name for path in paths.approved.glob("*.md")], ["task.md"])
+            self.assertFalse(any(paths.active.glob("*.md")))
+            self.assertFalse(any(paths.blocked.glob("*.md")))
+
+    def test_two_launch_failures_third_succeeds(self):
+        with tempfile.TemporaryDirectory() as cc, tempfile.TemporaryDirectory() as parent:
+            root = Path(cc)
+            project = Path(parent) / "project"
+            paths, codex = self.setup_cycle(root, project)
+            results = [
+                SimpleNamespace(returncode=1, stdout="", stderr="temporary one"),
+                SimpleNamespace(returncode=2, stdout="", stderr="temporary two"),
+                SimpleNamespace(returncode=0, stdout="# PASS\nok", stderr=""),
+            ]
+            delays = []
+            with mock.patch.object(cx, "invoke_codex", side_effect=results) as invoke:
+                self.assertEqual(cx.process_one(paths, codex, sleep_fn=delays.append), 0)
+            self.assertEqual(invoke.call_count, 3)
+            self.assertEqual(delays, list(cx.CODEX_RETRY_DELAYS_SECONDS))
+            self.assertTrue((paths.approved / "task.md").exists())
+
+    def test_all_three_launch_attempts_fail_with_safe_diagnostics(self):
+        with tempfile.TemporaryDirectory() as cc, tempfile.TemporaryDirectory() as parent:
+            root = Path(cc)
+            project = Path(parent) / "project"
+            paths, codex = self.setup_cycle(root, project)
+            secret = "very-private-value"
+            huge = "x" * (cx.ATTEMPT_STREAM_LOG_CHARS + 1000)
+            result = SimpleNamespace(
+                returncode=1, stdout=f"TOKEN={secret}\n{huge}", stderr=f"PASSWORD={secret}\n{huge}",
+            )
+            with mock.patch.object(cx, "invoke_codex", return_value=result) as invoke:
+                self.assertEqual(cx.process_one(paths, codex, sleep_fn=lambda _delay: None), 1)
+            self.assertEqual(invoke.call_count, 3)
+            self.assertTrue((paths.blocked / "task.md").exists())
+            log = next(paths.logs.glob("*.log")).read_text(encoding="utf-8")
+            self.assertIn("BLOCKED_CODEX_LAUNCH", log)
+            self.assertEqual(log.count("attempt="), 3)
+            self.assertEqual(log.count("exit_code=1"), 3)
+            self.assertNotIn(secret, log)
+            self.assertIn("[TRUNCATED", log)
+            self.assertLessEqual(len(log), cx.LOG_TRUNCATE_CHARS)
+
+    def test_authentication_and_permission_failures_are_not_retried(self):
+        cases = (
+            ("authentication failed; please log in", "BLOCKED_CODEX_AUTH"),
+            ("account does not have access", "BLOCKED_CODEX_PERMISSION"),
+        )
+        for stderr, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as cc, \
+                    tempfile.TemporaryDirectory() as parent:
+                root = Path(cc)
+                project = Path(parent) / "project"
+                paths, codex = self.setup_cycle(root, project)
+                result = SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+                with mock.patch.object(cx, "invoke_codex", return_value=result) as invoke:
+                    self.assertEqual(cx.process_one(paths, codex, sleep_fn=lambda _delay: None), 1)
+                self.assertEqual(invoke.call_count, 1)
+                log = next(paths.logs.glob("*.log")).read_text(encoding="utf-8")
+                self.assertIn(expected, log)
+
+    def test_git_and_policy_failures_are_reclassified_without_retry(self):
+        cases = (
+            ("fatal: not a git repository", "BLOCKED_GIT_ACCESS"),
+            ("request blocked by policy", "BLOCKED_CODEX_POLICY"),
+        )
+        for stderr, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as cc, \
+                    tempfile.TemporaryDirectory() as parent:
+                root = Path(cc)
+                project = Path(parent) / "project"
+                paths, codex = self.setup_cycle(root, project)
+                result = SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+                with mock.patch.object(cx, "invoke_codex", return_value=result) as invoke:
+                    self.assertEqual(cx.process_one(paths, codex, sleep_fn=lambda _delay: None), 1)
+                self.assertEqual(invoke.call_count, 1)
+                self.assertIn(
+                    expected,
+                    next(paths.logs.glob("*.log")).read_text(encoding="utf-8"),
+                )
+
     def test_mutation_anywhere_in_worktree_routes_to_blocked(self):
         with tempfile.TemporaryDirectory() as cc, tempfile.TemporaryDirectory() as parent:
             root = Path(cc)

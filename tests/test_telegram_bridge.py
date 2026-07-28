@@ -297,6 +297,25 @@ class TelegramBridgeTests(unittest.TestCase):
                 {"queued", "passed"},
             )
 
+    def test_passed_task_hides_obsolete_blocker_from_older_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "TASK_20260727T130000Z_DONE"
+            completed = state / "queue/completed"
+            logs = state / "logs/orchestrator"
+            completed.mkdir(parents=True)
+            logs.mkdir(parents=True)
+            (completed / f"{task_id}.md").write_text(
+                f"Task-ID: {task_id}\nGoal: completed\n", encoding="utf-8",
+            )
+            (logs / f"{task_id}-01C-old.log").write_text(
+                "BLOCKED_CODEX_LAUNCH\n", encoding="utf-8",
+            )
+            task = bridge.recent_tasks(state, {}, 1)[0]
+            self.assertEqual(task["state"], "passed")
+            self.assertEqual(task["result"], "")
+            self.assertNotIn("BLOCKED CODEX LAUNCH", bridge.status_message(state, {}))
+
     def test_status_result_is_allowlisted_and_malformed_files_are_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
