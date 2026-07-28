@@ -216,6 +216,27 @@ def status_message(state_root: Path, projects: dict[str, dict]) -> str:
             if task["result"]:
                 line += f" | {task['result']}"
             lines.append(line)
+    campaign_dir = state_root / "campaigns"
+    campaigns = []
+    try:
+        campaign_paths = sorted(campaign_dir.glob("*.json"))
+    except OSError:
+        campaign_paths = []
+    for path in campaign_paths:
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            campaigns.append(
+                f"- {redact(state['campaign_id'])} | {redact(state['state'])} | "
+                f"{int(state['completed_steps'])}/{len(state['plan']['tasks'])} | "
+                f"current={redact(state.get('current_step') or 'none')} | "
+                f"deadline={redact(state['deadline'])} | "
+                f"branch={redact(state['integration_branch'])} | "
+                "no-push=yes | no-deploy=yes"
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    lines.append("Campaigns:" if campaigns else "Campaigns: none")
+    lines.extend(campaigns)
     return "\n".join(lines)
 
 

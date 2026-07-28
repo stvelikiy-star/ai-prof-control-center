@@ -25,6 +25,14 @@
       "path": "/home/agent/projects/ak-bermet",
       "enabled": true,
       "base_branch": "develop",
+      "allowed_base_branches": [
+        "develop",
+        "integration/ak-bermet-3day"
+      ],
+      "local_integration_branches": [
+        "integration/ak-bermet-3day"
+      ],
+      "allow_local_campaign_merge": true,
       "work_prefixes": [
         "feature/",
         "fix/"

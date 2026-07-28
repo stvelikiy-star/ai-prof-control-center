@@ -17,6 +17,7 @@
 - `Required-Commands:`
 - `Required-Environment:`
 - `Owner-Approval-Required: yes|no`
+- `Scope-Files:` (comma-separated paths constrained by the project profile)
 
 Правила:
 - Режим по умолчанию — `code`; он сохраняет существующий Bubblewrap sandbox.
@@ -52,6 +53,31 @@
 `submit_task.py` создаёт тот же Task Schema V2 атомарно в `queue/pending`.
 Реестр `projects.json` ограничивает проект, базовую/рабочую ветку и
 `Scope-Files`; commit, push, merge и deployment запрещены.
+
+`Base-Branch` выбирается только из `allowed_base_branches` зарегистрированного
+проекта. `submit_task.py create --base-branch BRANCH` является необязательным;
+без него используется `base_branch` профиля. Произвольные ветки отклоняются.
+
+## Локальная integration campaign
+
+Только профиль с `allow_local_campaign_merge: true` может разрешить отдельному
+campaign controller локальные commit и `merge --no-ff`. Целевая ветка обязана
+быть одновременно в `allowed_base_branches` и `local_integration_branches`.
+Глобальные `allow_merge`, `allow_push` и `allow_deployment` остаются `false`.
+
+Campaign-задача дополнительно содержит:
+
+- `Campaign-ID:`
+- `Integration-Branch:`
+- `Local-Auto-Merge-Approved: yes`
+- `Owner-Approval-Token:`
+
+Controller обрабатывает только такую задачу из `queue/approved`, требует точное
+совпадение сохранённого approval token и последний
+`STAGE_01C_AUDIT_PASS`, проверяет Work-Branch и Scope-Files, затем выполняет
+исключительно локальный commit/merge. Обычные задачи никогда автоматически не
+merge-ятся. Push, remote operations, deployment, migrations, destructive SQL,
+credentials и production data не входят в capability controller.
 
 Для зарегистрированной операции:
 

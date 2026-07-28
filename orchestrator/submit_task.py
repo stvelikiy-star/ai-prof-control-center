@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
 from operation_profiles import resolve_profile
+from project_registry import allowed_base_branches
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -80,20 +81,23 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
             raise IntakeError(f"invalid work prefixes: {project_id}")
         if not isinstance(item["allowed_scope"], list) or not item["allowed_scope"]:
             raise IntakeError(f"invalid allowed scope: {project_id}")
-        if item["base_branch"] not in {"main", "develop"}:
-            raise IntakeError(f"invalid base branch: {project_id}")
+        try:
+            branches = allowed_base_branches(item)
+        except ValueError as exc:
+            raise IntakeError(f"invalid base branches: {project_id}: {exc}") from exc
         context = (root / item["agent_context"]).resolve()
         if root.resolve() not in context.parents or not context.is_dir():
             raise IntakeError(f"invalid agent context: {project_id}")
         if validate_project:
             if not (project / ".git").is_dir():
                 raise IntakeError(f"project is not a Git repository: {project_id}")
-            result = subprocess.run(
-                ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{item['base_branch']}"],
-                cwd=project, capture_output=True,
-            )
-            if result.returncode != 0:
-                raise IntakeError(f"base branch is unavailable: {project_id}")
+            for branch in branches:
+                result = subprocess.run(
+                    ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                    cwd=project, capture_output=True,
+                )
+                if result.returncode != 0:
+                    raise IntakeError(f"base branch is unavailable: {project_id}: {branch}")
         projects[project_id] = item
     if not projects:
         raise IntakeError("project registry is empty")
@@ -209,7 +213,8 @@ def validate_npm_run_checks(project: dict, required_checks: list[str]) -> None:
 def render_task(
     project: dict, task_id: str, title: str, instructions: str,
     work_branch: str, scope: list[str], execution_mode: str = "code",
-    operation_profile: str = "none",
+    operation_profile: str = "none", base_branch: str | None = None,
+    metadata: list[tuple[str, str]] | None = None,
 ) -> str:
     required_commands = project.get("code_required_commands", ["git", "python3"])
     required_checks = project.get("code_required_checks", [])
@@ -231,7 +236,7 @@ def render_task(
         ("Execution-Mode", execution_mode),
         ("Operation-Profile", operation_profile),
         ("Project-Path", project["path"]),
-        ("Base-Branch", project["base_branch"]),
+        ("Base-Branch", base_branch or project["base_branch"]),
         ("Work-Branch", work_branch),
         ("Agent-Context", project["agent_context"]),
         ("Goal", title),
@@ -245,6 +250,7 @@ def render_task(
         ("Owner-Approval-Required", "yes"),
         ("Scope-Files", ", ".join(scope)),
     ]
+    values.extend(metadata or [])
     return "\n".join(f"{key}: {value}" for key, value in values) + "\n"
 
 
@@ -369,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--title", required=True)
     create.add_argument("--instructions", required=True)
     create.add_argument("--work-branch", required=True)
+    create.add_argument("--base-branch")
     create.add_argument("--scope", action="append", required=True)
     create.add_argument("--execution-mode", choices=("code", "operations"), default="code")
     create.add_argument("--operation-profile")
@@ -417,6 +424,9 @@ def main() -> int:
             if args.project not in projects:
                 raise IntakeError(f"unknown project: {args.project}")
             project = projects[args.project]
+            base_branch = args.base_branch or project["base_branch"]
+            if base_branch not in allowed_base_branches(project):
+                raise IntakeError("base branch is outside allowed_base_branches")
             if args.execution_mode == "operations":
                 if not args.operation_profile:
                     raise IntakeError("operation profile is required for operations mode")
@@ -438,7 +448,7 @@ def main() -> int:
             task_id = make_task_id(args.project)
             content = render_task(
                 project, task_id, title, instructions, args.work_branch, scope,
-                args.execution_mode, args.operation_profile or "none",
+                args.execution_mode, args.operation_profile or "none", base_branch,
             )
             result = {
                 "task_id": task_id,
