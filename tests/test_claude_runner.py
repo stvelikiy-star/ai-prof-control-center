@@ -60,6 +60,37 @@ def snapshot_git_state(repo: Path) -> dict:
 
 
 class ClaudeRunnerTests(unittest.TestCase):
+    def test_pre_inference_retry_policy_is_token_safe(self):
+        temporary = SimpleNamespace(
+            returncode=1,
+            stdout='{"usage":{"input_tokens":0,"output_tokens":0},"duration_api_ms":0}',
+            stderr="temporary service unavailable",
+        )
+        success = SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        with mock.patch.object(cr, "invoke_claude", side_effect=[temporary, success]) as invoke:
+            result, evidence = cr.invoke_claude_with_retries("x", Path("/tmp"), Path("/tmp/mcp"))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(invoke.call_count, 2)
+        self.assertTrue(evidence[0]["retried"])
+
+        consumed = SimpleNamespace(
+            returncode=1,
+            stdout='{"usage":{"input_tokens":10,"output_tokens":0},"duration_api_ms":20}',
+            stderr="temporary service unavailable",
+        )
+        with mock.patch.object(cr, "invoke_claude", return_value=consumed) as invoke:
+            _result, evidence = cr.invoke_claude_with_retries("x", Path("/tmp"), Path("/tmp/mcp"))
+        self.assertEqual(invoke.call_count, 1)
+        self.assertFalse(evidence[0]["retried"])
+
+        for stderr in ("not authenticated", "permission denied"):
+            failure = SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+            with self.subTest(stderr=stderr), mock.patch.object(
+                cr, "invoke_claude", return_value=failure,
+            ) as invoke:
+                cr.invoke_claude_with_retries("x", Path("/tmp"), Path("/tmp/mcp"))
+                self.assertEqual(invoke.call_count, 1)
+
     def make_context(self, root: Path) -> Path:
         context = root / "agents" / "ak-bermet"
         context.mkdir(parents=True)

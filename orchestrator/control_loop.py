@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
+import campaign_runner
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -196,6 +197,9 @@ def run_cycle(paths: ControlPaths, timeout: int = CHILD_TIMEOUT_SECONDS) -> int:
         if result not in (0, 1):
             write_heartbeat(paths, last_result=f"{stage}:{result}")
             return result
+    if not paths.stop.exists() and not paths.pause.exists():
+        campaign_result = campaign_runner.tick_all(paths.root, paths.state.parent)
+        append_log(paths, f"END stage=campaign_tick returncode={campaign_result}")
     write_heartbeat(paths, last_result="cycle_complete")
     return 0
 

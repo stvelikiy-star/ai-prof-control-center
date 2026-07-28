@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
+from project_registry import validate_task_base_branch
 
 
 _ORCHESTRATOR_PATH = Path(__file__).resolve().parent / "orchestrator.py"
@@ -730,8 +731,10 @@ def process_one(
 
         if not orch.is_valid_work_branch(data["Work-Branch"]):
             raise TaskStateError("BLOCKED_TASK_STATE: invalid work branch")
-        if data["Base-Branch"] not in {"main", "develop"}:
-            raise TaskStateError("BLOCKED_TASK_STATE: invalid base branch")
+        try:
+            validate_task_base_branch(paths.root, data["Project-Path"], data["Base-Branch"])
+        except ValueError as exc:
+            raise TaskStateError(f"BLOCKED_TASK_STATE: invalid base branch: {exc}") from exc
 
         scope_entries = cr.resolve_scope_entries(project, cr.parse_scope_files(task_text))
 

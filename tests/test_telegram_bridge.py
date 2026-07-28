@@ -36,6 +36,25 @@ class TelegramBridgeTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertFalse(bridge.authorized(message, self.config))
 
+    def test_status_includes_campaign_safety_and_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            campaigns = state / "campaigns"
+            campaigns.mkdir()
+            (campaigns / "three-day.json").write_text(json.dumps({
+                "campaign_id": "three-day", "state": "active",
+                "completed_steps": 1, "current_step": "two",
+                "deadline": "2026-01-04T00:00:00Z",
+                "integration_branch": "integration/ak-bermet-3day",
+                "plan": {"tasks": [{}, {}]},
+            }), encoding="utf-8")
+            message = bridge.status_message(state, {})
+            self.assertIn("three-day | active | 1/2", message)
+            self.assertIn("current=two", message)
+            self.assertIn("deadline=2026-01-04T00:00:00Z", message)
+            self.assertIn("branch=integration/ak-bermet-3day", message)
+            self.assertIn("no-push=yes | no-deploy=yes", message)
+
     def test_command_parsing_and_ordinary_messages(self):
         self.assertIsNone(bridge.parse_command("daily report complete"))
         self.assertEqual(bridge.parse_command("/ai help"), bridge.Command("help"))

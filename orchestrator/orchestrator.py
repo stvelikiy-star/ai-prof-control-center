@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
+from project_registry import validate_task_base_branch
 
 
 REQUIRED_FIELDS = [
@@ -262,8 +263,10 @@ def process_one(paths: Paths) -> int:
             raise RuntimeError(f"BLOCKED_DIRTY_PROJECT: {project}")
         if not is_valid_work_branch(data["Work-Branch"]):
             raise RuntimeError("BLOCKED_INVALID_WORK_BRANCH")
-        if data["Base-Branch"] not in {"main", "develop"}:
-            raise RuntimeError("BLOCKED_INVALID_BASE_BRANCH")
+        try:
+            validate_task_base_branch(paths.root, data["Project-Path"], data["Base-Branch"])
+        except ValueError as exc:
+            raise RuntimeError(f"BLOCKED_INVALID_BASE_BRANCH: {exc}") from exc
 
         validate_access(data)
         context = load_context(paths.root, data["Agent-Context"])

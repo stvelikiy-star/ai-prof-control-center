@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
+from project_registry import validate_task_base_branch
 
 
 _ORCHESTRATOR_PATH = Path(__file__).resolve().parent / "orchestrator.py"
@@ -58,6 +59,7 @@ CLAUDE_CONTEXT_FILES = [
 CLAUDE_CLI = "claude"
 CLAUDE_TIMEOUT_SECONDS = 1800
 CHECK_TIMEOUT_SECONDS = 900
+MAX_PRE_INFERENCE_RETRIES = 3
 
 # Fixed, absolute production path: never searched via PATH, so a PATH-based
 # substitution cannot swap in an attacker-controlled "bwrap".
@@ -240,6 +242,68 @@ class ClaudeExecutionError(RuntimeError):
     """Genuine Claude execution failure. Always routes to failed."""
 
     status_code = "CLAUDE_FAILED"
+
+
+_TEMPORARY_CLAUDE_MARKERS = (
+    "temporarily unavailable", "temporary service", "service unavailable",
+    "network error", "connection reset", "connection refused", "timed out",
+    "timeout", "502", "503", "504",
+)
+
+
+def claude_usage(result) -> tuple[int | None, int | None, float | None]:
+    """Extract CLI JSON usage without treating absent evidence as zero."""
+    try:
+        payload = json.loads(result.stdout or "")
+    except (TypeError, ValueError):
+        return None, None, None
+    usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+    input_tokens = usage.get("input_tokens", payload.get("input_tokens"))
+    output_tokens = usage.get("output_tokens", payload.get("output_tokens"))
+    duration = payload.get("duration_api_ms", payload.get("api_duration_ms"))
+    return (
+        input_tokens if isinstance(input_tokens, int) else None,
+        output_tokens if isinstance(output_tokens, int) else None,
+        float(duration) if isinstance(duration, (int, float)) else None,
+    )
+
+
+def retryable_pre_inference_failure(result) -> bool:
+    detail = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+    if is_claude_auth_failure(detail) or is_claude_permission_failure(detail):
+        return False
+    input_tokens, output_tokens, duration = claude_usage(result)
+    proven_zero = input_tokens == 0 and output_tokens == 0 and duration == 0
+    explicit_temporary = any(marker in detail for marker in _TEMPORARY_CLAUDE_MARKERS)
+    if input_tokens not in (None, 0) or output_tokens not in (None, 0):
+        return False
+    return proven_zero or explicit_temporary
+
+
+def invoke_claude_with_retries(bundle, workspace, mcp_config_path, *, node_toolchain=None):
+    evidence = []
+    for attempt in range(1, MAX_PRE_INFERENCE_RETRIES + 2):
+        if node_toolchain is None:
+            result = invoke_claude(bundle, workspace, mcp_config_path)
+        else:
+            result = invoke_claude(
+                bundle, workspace, mcp_config_path, node_toolchain=node_toolchain,
+            )
+        usage = claude_usage(result)
+        evidence.append({
+            "attempt": attempt, "returncode": result.returncode,
+            "input_tokens": usage[0], "output_tokens": usage[1],
+            "api_duration_ms": usage[2],
+            "retried": bool(
+                result.returncode and attempt <= MAX_PRE_INFERENCE_RETRIES
+                and retryable_pre_inference_failure(result)
+            ),
+        })
+        if result.returncode == 0 or not evidence[-1]["retried"]:
+            return result, evidence
+    return result, evidence
 
 
 @dataclass(frozen=True)
@@ -1620,8 +1684,10 @@ def process_one(paths: ClaudePaths) -> int:
 
         if not orch.is_valid_work_branch(data["Work-Branch"]):
             raise InvalidBranchNameError("BLOCKED_INVALID_BRANCH: invalid work branch")
-        if data["Base-Branch"] not in {"main", "develop"}:
-            raise InvalidBranchNameError("BLOCKED_INVALID_BRANCH: invalid base branch")
+        try:
+            validate_task_base_branch(paths.root, data["Project-Path"], data["Base-Branch"])
+        except ValueError as exc:
+            raise InvalidBranchNameError(f"BLOCKED_INVALID_BRANCH: {exc}") from exc
 
         context = load_claude_context(paths.root, data["Agent-Context"])
         required_checks = parse_required_checks(data["Required-Checks"])
@@ -1667,19 +1733,26 @@ def process_one(paths: ClaudePaths) -> int:
             mcp_config_path = build_claude_mcp_config(scratch_dir)
 
             bundle = build_claude_bundle(task_text, context)
-            if node_toolchain is None:
-                result = invoke_claude(bundle, workspace_dir, mcp_config_path)
-            else:
-                result = invoke_claude(
-                    bundle, workspace_dir, mcp_config_path, node_toolchain=node_toolchain,
-                )
+            result, claude_attempts = invoke_claude_with_retries(
+                bundle, workspace_dir, mcp_config_path, node_toolchain=node_toolchain,
+            )
             if result.returncode != 0:
                 detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()[:500]
+                retry_detail = json.dumps(claude_attempts, sort_keys=True)
                 if is_claude_auth_failure(detail):
-                    raise ClaudeAuthError(f"BLOCKED_CLAUDE_AUTH: claude authentication failed: {detail}")
+                    raise ClaudeAuthError(
+                        f"BLOCKED_CLAUDE_AUTH: claude authentication failed: {detail}; "
+                        f"attempts={retry_detail}"
+                    )
                 if is_claude_permission_failure(detail):
-                    raise ClaudePermissionError(f"BLOCKED_CLAUDE_PERMISSION: claude account/permission failure: {detail}")
-                raise ClaudeExecutionError(f"CLAUDE_FAILED: claude exited with {result.returncode}: {detail}")
+                    raise ClaudePermissionError(
+                        f"BLOCKED_CLAUDE_PERMISSION: claude account/permission failure: {detail}; "
+                        f"attempts={retry_detail}"
+                    )
+                raise ClaudeExecutionError(
+                    f"CLAUDE_FAILED: claude exited with {result.returncode}: {detail}; "
+                    f"attempts={retry_detail}"
+                )
 
             audit_workspace_integrity(workspace_dir, scope_entries)
             changes = compute_workspace_diff(workspace_dir, before_snapshot)
@@ -1710,6 +1783,7 @@ def process_one(paths: ClaudePaths) -> int:
             f"applied_changes={','.join(applied_changes) if applied_changes else 'none'}",
             f"codex_review_attempt={review_attempt}",
             f"checks_executed={','.join(executed_checks) if executed_checks else 'none'}",
+            f"claude_attempts={json.dumps(claude_attempts, sort_keys=True)}",
             "sandbox=bubblewrap",
             "codex_launched=false",
             "merge_capability=false",
