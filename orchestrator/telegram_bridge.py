@@ -160,7 +160,9 @@ def recent_tasks(
             title = re.sub(r"[\x00-\x1f\x7f]+", " ", title).strip()[:120] or "untitled"
             found.append({
                 "id": task_id, "project": project, "title": title,
-                "state": public_state, "result": _safe_result(state_root, task_id),
+                "state": public_state,
+                # A terminal success supersedes blockers from older stage logs.
+                "result": "" if public_state == "passed" else _safe_result(state_root, task_id),
                 "_time": str(_task_time(task_id, path)),
             })
     found.sort(key=lambda item: (float(item["_time"]), item["id"]), reverse=True)

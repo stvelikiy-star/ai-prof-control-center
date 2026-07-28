@@ -8,7 +8,7 @@ safety and Git helpers (claude_runner.py) by importing both modules
 directly, exactly as claude_runner.py imports orchestrator.py. This module
 never overloads or modifies either file.
 
-Codex is an independent auditor, never an actor: it is invoked once, only
+Codex is an independent auditor, never an actor: each invocation is made only
 through `codex exec -s read-only -C <target-project> -`, with the audit
 prompt on stdin and argv built as a fixed list (never a shell string). It is
 never granted workspace-write or danger-full-access, and Stage 01C never
@@ -41,6 +41,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -70,6 +71,9 @@ CODEX_TIMEOUT_SECONDS = 900
 DEFAULT_MAX_REVIEW_ATTEMPTS = 3
 MAX_CODEX_STDOUT_BYTES = 65536
 LOG_TRUNCATE_CHARS = 20000
+MAX_CODEX_LAUNCH_ATTEMPTS = 3
+CODEX_RETRY_DELAYS_SECONDS = (0.25, 0.5)
+ATTEMPT_STREAM_LOG_CHARS = 2500
 
 SELF_TEST_MARKER = "STAGE_01C_CODEX_PASS"
 AUDIT_PASS_MARKER = "STAGE_01C_AUDIT_PASS"
@@ -478,6 +482,11 @@ _CODEX_GIT_MARKERS = (
     "could not read from remote", "fatal: ",
 )
 
+_CODEX_POLICY_MARKERS = (
+    "sandbox policy", "policy violation", "blocked by policy",
+    "approval policy", "sandbox mode", "read-only policy",
+)
+
 
 def is_codex_auth_failure(text: str) -> bool:
     lowered = (text or "").lower()
@@ -492,6 +501,49 @@ def is_codex_permission_failure(text: str) -> bool:
 def is_codex_git_failure(text: str) -> bool:
     lowered = (text or "").lower()
     return any(marker in lowered for marker in _CODEX_GIT_MARKERS)
+
+
+def is_codex_policy_failure(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _CODEX_POLICY_MARKERS)
+
+
+def classify_nonzero_codex_result(result: subprocess.CompletedProcess) -> CodexAccessFailure:
+    """Classify known terminal failures before an unclassified launch retry."""
+    combined = f"{result.stdout or ''}\n{result.stderr or ''}"
+    if is_codex_auth_failure(combined):
+        return CodexAuthError("BLOCKED_CODEX_AUTH: codex authentication failed")
+    if is_codex_permission_failure(combined):
+        return CodexPermissionError("BLOCKED_CODEX_PERMISSION: codex account/permission failure")
+    if is_codex_git_failure(combined):
+        return GitEvidenceError("BLOCKED_GIT_ACCESS: codex reported a Git access failure")
+    if is_codex_policy_failure(combined):
+        return CodexPolicyError("BLOCKED_CODEX_POLICY: codex reported a policy failure")
+    return CodexLaunchError(
+        f"BLOCKED_CODEX_LAUNCH: codex exited with status {result.returncode}"
+    )
+
+
+def _safe_attempt_stream(text: str) -> str:
+    safe = orch.redact(text or "")
+    encoded = safe.encode("utf-8", "replace")
+    if len(encoded) <= ATTEMPT_STREAM_LOG_CHARS:
+        return safe
+    omitted = len(encoded) - ATTEMPT_STREAM_LOG_CHARS
+    prefix = encoded[:ATTEMPT_STREAM_LOG_CHARS].decode("utf-8", "ignore")
+    return prefix + f"...[TRUNCATED {omitted} BYTES]"
+
+
+def format_attempt_evidence(attempts: list[dict[str, object]]) -> str:
+    lines = ["codex_launch_attempts:"]
+    for attempt in attempts:
+        lines.extend([
+            f"attempt={attempt['attempt']}",
+            f"exit_code={attempt['exit_code']}",
+            f"stdout={json.dumps(attempt['stdout'], ensure_ascii=True)}",
+            f"stderr={json.dumps(attempt['stderr'], ensure_ascii=True)}",
+        ])
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +696,7 @@ def process_one(
     paths: CodexPaths,
     codex_cli: Path = DEFAULT_CODEX_CLI,
     max_review_attempts: int | None = None,
+    sleep_fn=time.sleep,
 ) -> int:
     tasks = sorted(paths.pending_codex.glob("*.md"))
     if not tasks:
@@ -663,6 +716,7 @@ def process_one(
     if max_review_attempts is None:
         max_review_attempts = load_max_review_attempts(paths.root)
 
+    attempt_evidence: list[dict[str, object]] = []
     try:
         data, task_text = orch.parse_task(active_task)
         review_attempt = parse_review_attempt(task_text)
@@ -694,32 +748,50 @@ def process_one(
         verify_status_within_scope(before.status, scope_entries)
 
         prompt = build_audit_prompt(task_text, scope_entries, data["Required-Checks"])
-        result = invoke_codex(codex_path, project, prompt)
+        result = None
+        for launch_attempt in range(1, MAX_CODEX_LAUNCH_ATTEMPTS + 1):
+            try:
+                result = invoke_codex(codex_path, project, prompt)
+            except CodexLaunchError as exc:
+                attempt_evidence.append({
+                    "attempt": launch_attempt,
+                    "exit_code": "not_available",
+                    "stdout": "",
+                    "stderr": _safe_attempt_stream(str(exc)),
+                })
+                if launch_attempt == MAX_CODEX_LAUNCH_ATTEMPTS:
+                    raise
+                sleep_fn(CODEX_RETRY_DELAYS_SECONDS[launch_attempt - 1])
+                continue
+            attempt_evidence.append({
+                "attempt": launch_attempt,
+                "exit_code": result.returncode,
+                "stdout": _safe_attempt_stream(result.stdout or ""),
+                "stderr": _safe_attempt_stream(result.stderr or ""),
+            })
 
-        after = collect_repo_evidence(project, scope_entries)
-        if before != after:
-            raise RepositoryMutationError(
-                "BLOCKED_REPOSITORY_MUTATION: target repository changed during Codex audit"
-            )
-        verify_status_within_scope(after.status, scope_entries)
+            after = collect_repo_evidence(project, scope_entries)
+            if before != after:
+                raise RepositoryMutationError(
+                    "BLOCKED_REPOSITORY_MUTATION: target repository changed during Codex audit"
+                )
+            verify_status_within_scope(after.status, scope_entries)
 
+            if result.returncode == 0:
+                break
+            failure = classify_nonzero_codex_result(result)
+            if not isinstance(failure, CodexLaunchError):
+                raise failure
+            if launch_attempt == MAX_CODEX_LAUNCH_ATTEMPTS:
+                raise failure
+            sleep_fn(CODEX_RETRY_DELAYS_SECONDS[launch_attempt - 1])
+
+        if result is None:  # Defensive: the bounded loop always runs.
+            raise CodexLaunchError("BLOCKED_CODEX_LAUNCH: codex produced no launch result")
         raw_stdout = result.stdout or ""
-        raw_stderr = result.stderr or ""
         if len(raw_stdout.encode("utf-8", "ignore")) > MAX_CODEX_STDOUT_BYTES:
             raise VerdictProtocolError(
                 "BLOCKED_VERDICT_PROTOCOL: codex stdout exceeded the maximum allowed size"
-            )
-
-        if result.returncode != 0:
-            combined = f"{raw_stdout}\n{raw_stderr}"
-            if is_codex_auth_failure(combined):
-                raise CodexAuthError("BLOCKED_CODEX_AUTH: codex authentication failed")
-            if is_codex_permission_failure(combined):
-                raise CodexPermissionError("BLOCKED_CODEX_PERMISSION: codex account/permission failure")
-            if is_codex_git_failure(combined):
-                raise GitEvidenceError("BLOCKED_GIT_ACCESS: codex reported a Git access failure")
-            raise CodexLaunchError(
-                f"BLOCKED_CODEX_LAUNCH: codex exited with status {result.returncode}"
             )
 
         # Verdict text is always parsed and is the source of truth. Any
@@ -743,7 +815,9 @@ def process_one(
                 "production_deploy_capability=false",
                 "repository_mutated=false",
             ])
-            log_text = truncate_for_log(summary + "\n" + redacted_feedback)
+            log_text = truncate_for_log(
+                summary + "\n" + format_attempt_evidence(attempt_evidence) + "\n" + redacted_feedback
+            )
             log_path.write_text(orch.redact(log_text) + "\n", encoding="utf-8")
             orch.safe_move(active_task, paths.approved)
             print(AUDIT_PASS_MARKER)
@@ -773,7 +847,9 @@ def process_one(
             "claude_launched=false",
             "repository_mutated=false",
         ])
-        log_text = truncate_for_log(summary + "\n" + redacted_feedback)
+        log_text = truncate_for_log(
+            summary + "\n" + format_attempt_evidence(attempt_evidence) + "\n" + redacted_feedback
+        )
         log_path.write_text(orch.redact(log_text) + "\n", encoding="utf-8")
         orch.safe_move(active_task, paths.review)
         print(AUDIT_FAIL_MARKER)
@@ -790,9 +866,11 @@ def process_one(
         except orch.AtomicMoveUnavailable:
             print("BLOCKED_ATOMIC_NOREPLACE_UNAVAILABLE", file=sys.stderr)
             return 3
-        log_path.write_text(
-            orch.redact(f"{status_code}\n{type(exc).__name__}: {exc}\n"), encoding="utf-8",
+        diagnostic = (
+            f"{status_code}\n{type(exc).__name__}: {exc}\n"
+            f"{format_attempt_evidence(attempt_evidence)}\n"
         )
+        log_path.write_text(orch.redact(truncate_for_log(diagnostic)), encoding="utf-8")
         print(status_code, file=sys.stderr)
         return 1
 
