@@ -49,11 +49,14 @@ class TelegramBridgeTests(unittest.TestCase):
                 "plan": {"tasks": [{}, {}]},
             }), encoding="utf-8")
             message = bridge.status_message(state, {})
-            self.assertIn("three-day | active | 1/2", message)
-            self.assertIn("current=two", message)
-            self.assertIn("deadline=2026-01-04T00:00:00Z", message)
-            self.assertIn("branch=integration/ak-bermet-3day", message)
-            self.assertIn("no-push=yes | no-deploy=yes", message)
+            self.assertIn("Campaign-ID: three-day", message)
+            self.assertIn("State: active", message)
+            self.assertIn("Progress: 1/2", message)
+            self.assertIn("Current step: two", message)
+            self.assertIn("UTC deadline: 2026-01-04T00:00:00Z", message)
+            self.assertIn("Integration branch: integration/ak-bermet-3day", message)
+            self.assertIn("Push disabled: yes", message)
+            self.assertIn("Deployment disabled: yes", message)
 
     def test_command_parsing_and_ordinary_messages(self):
         self.assertIsNone(bridge.parse_command("daily report complete"))
@@ -302,7 +305,7 @@ class TelegramBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
             for index, (queue, expected) in enumerate((
-                ("review", "queued"), ("pending_codex", "queued"),
+                ("review", "correction"), ("pending_codex", "codex audit"),
                 ("completed", "passed"),
             )):
                 task_id = f"TASK_20260727T13000{index}Z_X"
@@ -313,7 +316,7 @@ class TelegramBridgeTests(unittest.TestCase):
                 )
             self.assertEqual(
                 {task["state"] for task in bridge.recent_tasks(state, {}, 10)},
-                {"queued", "passed"},
+                {"correction", "codex audit", "passed"},
             )
 
     def test_passed_task_hides_obsolete_blocker_from_older_log(self):
@@ -332,10 +335,10 @@ class TelegramBridgeTests(unittest.TestCase):
             )
             task = bridge.recent_tasks(state, {}, 1)[0]
             self.assertEqual(task["state"], "passed")
-            self.assertEqual(task["result"], "")
+            self.assertEqual(task["result"], "PASS")
             self.assertNotIn("BLOCKED CODEX LAUNCH", bridge.status_message(state, {}))
 
-    def test_status_result_is_allowlisted_and_malformed_files_are_safe(self):
+    def test_terminal_reason_is_structured_and_malformed_files_are_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
             task_id = "PILOT_20260727T140000Z_SAFE"
@@ -351,9 +354,119 @@ class TelegramBridgeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             message = bridge.status_message(state, {})
-            self.assertIn("failed | CLAUDE FAILED", message)
+            self.assertIn("failed", message)
+            self.assertNotIn("CLAUDE FAILED", message)
             self.assertNotIn("full prompt", message)
             self.assertNotIn("secret", message)
+
+    def test_current_queue_supersedes_stale_history_for_all_nonterminal_states(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            cases = (
+                ("active", "running", "BLOCKED_OLD"),
+                ("pending_codex", "codex audit", "CLAUDE_FAILED"),
+            )
+            for index, (queue_name, expected, stale) in enumerate(cases):
+                task_id = f"TASK_20260727T15000{index}Z_CURRENT"
+                queue = state / "queue" / queue_name
+                logs = state / "logs/orchestrator"
+                queue.mkdir(parents=True, exist_ok=True)
+                logs.mkdir(parents=True, exist_ok=True)
+                (queue / f"{task_id}.md").write_text(
+                    f"Task-ID: {task_id}\nGoal: current\nInstructions: old {stale}\n",
+                    encoding="utf-8",
+                )
+                (logs / f"{task_id}-old.log").write_text(stale, encoding="utf-8")
+                task = next(item for item in bridge.recent_tasks(state, {}, 10)
+                            if item["id"] == task_id)
+                self.assertEqual(task["state"], expected)
+                self.assertEqual(task["result"], "")
+            message = bridge.status_message(state, {})
+            self.assertNotIn("BLOCKED OLD", message)
+            self.assertNotIn("CLAUDE FAILED", message)
+
+    def test_completed_old_fail_text_always_displays_pass_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "TASK_20260727T160000Z_PASS"
+            queue = state / "queue/completed"
+            queue.mkdir(parents=True)
+            (queue / f"{task_id}.md").write_text(
+                f"Task-ID: {task_id}\nGoal: done\nInstructions: old FAIL and BLOCKED_CODEX\n",
+                encoding="utf-8",
+            )
+            message = bridge.status_message(state, {})
+            self.assertIn("passed | PASS", message)
+            self.assertNotIn("FAIL", message)
+            self.assertNotIn("BLOCKED CODEX", message)
+
+    def test_blocked_uses_current_structured_reason_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "TASK_20260727T170000Z_BLOCKED"
+            queue = state / "queue/blocked"
+            logs = state / "logs/orchestrator"
+            queue.mkdir(parents=True)
+            logs.mkdir(parents=True)
+            (queue / f"{task_id}.md").write_text(
+                f"Task-ID: {task_id}\nGoal: blocked\n"
+                "Blocked-Reason: BLOCKED_CURRENT_ACCESS\n",
+                encoding="utf-8",
+            )
+            (logs / f"{task_id}-old.log").write_text("BLOCKED_OLD", encoding="utf-8")
+            message = bridge.status_message(state, {})
+            self.assertIn("blocked | BLOCKED_CURRENT_ACCESS", message)
+            self.assertNotIn("BLOCKED_OLD", message)
+
+    def test_duplicate_task_id_reports_queue_inconsistency_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "TASK_20260727T180000Z_DUP"
+            for queue_name in ("pending", "active"):
+                queue = state / "queue" / queue_name
+                queue.mkdir(parents=True)
+                (queue / f"{task_id}.md").write_text(
+                    f"Task-ID: {task_id}\nGoal: duplicate\n", encoding="utf-8",
+                )
+            tasks = bridge.recent_tasks(state, {}, 10)
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(
+                tasks[0]["state"], "QUEUE INCONSISTENCY (active, pending)",
+            )
+
+    def test_campaign_current_task_comes_from_fresh_queue_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            task_id = "TASK_20260727T190000Z_CAMPAIGN"
+            queue = state / "queue/active"
+            campaigns = state / "campaigns"
+            queue.mkdir(parents=True)
+            campaigns.mkdir()
+            (queue / f"{task_id}.md").write_text(
+                f"Task-ID: {task_id}\nGoal: campaign\n", encoding="utf-8",
+            )
+            campaign_file = campaigns / "live.json"
+            campaign_file.write_text(json.dumps({
+                "campaign_id": "live", "state": "active",
+                "completed_steps": 2, "current_step": "verify",
+                "current_task_id": task_id, "deadline": "2026-07-29T00:00:00Z",
+                "integration_branch": "integration/live",
+                "plan": {"tasks": [{}, {}, {}]},
+            }), encoding="utf-8")
+            first = bridge.status_message(state, {})
+            self.assertIn(f"Current Task-ID: {task_id} | queue state: running", first)
+            queue.rename(state / "queue/completed")
+            campaign_file.write_text(json.dumps({
+                "campaign_id": "live", "state": "complete",
+                "completed_steps": 3, "current_step": None,
+                "current_task_id": task_id, "deadline": "2026-07-29T00:00:00Z",
+                "integration_branch": "integration/live",
+                "plan": {"tasks": [{}, {}, {}]},
+            }), encoding="utf-8")
+            second = bridge.status_message(state, {})
+            self.assertIn("State: complete", second)
+            self.assertIn("Progress: 3/3", second)
+            self.assertIn(f"Current Task-ID: {task_id} | queue state: passed", second)
 
     def test_status_handler_preserves_authorization_and_uses_runtime_report(self):
         client = mock.Mock()
