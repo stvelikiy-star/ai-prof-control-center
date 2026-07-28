@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import html
 import json
 import logging
 import os
@@ -40,14 +41,16 @@ SECRET_VALUE_RE = re.compile(
 )
 URL_CREDENTIAL_RE = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://\S+")
 STATUS_QUEUES = {
-    "pending": "queued", "review": "queued", "pending_codex": "queued",
+    "pending": "queued", "review": "correction", "pending_codex": "codex audit",
     "active": "running", "approved": "passed", "completed": "passed",
     "failed": "failed", "blocked": "blocked", "cancelled": "cancelled",
 }
-SAFE_RESULT_RE = re.compile(
-    r"\b(BLOCKED_[A-Z0-9_]+|[A-Z][A-Z0-9_]*_FAILED|"
-    r"AUDIT_(?:PASS|FAIL)|PASS WITH FIXES|PASS|FAIL)\b"
-)
+TERMINAL_REASON_FIELDS = {
+    "blocked": ("Blocked-Reason", "Current-Blocker", "Terminal-Reason"),
+    "failed": ("Failure-Reason", "Current-Failure", "Terminal-Reason"),
+    "cancelled": ("Cancellation-Reason", "Cancelled-Reason", "Terminal-Reason"),
+}
+TELEGRAM_MESSAGE_LIMIT = 4096
 HELP = (
     "AI PROF commands:\n"
     "/ai help\n"
@@ -93,7 +96,12 @@ def _task_fields(path: Path) -> dict[str, str]:
     except (OSError, UnicodeError):
         return {}
     fields = {}
-    for key in ("Task-ID", "Project-Path", "Goal"):
+    keys = (
+        "Task-ID", "Project-Path", "Goal", "Blocked-Reason", "Failure-Reason",
+        "Cancellation-Reason", "Current-Blocker", "Current-Failure",
+        "Cancelled-Reason", "Terminal-Reason",
+    )
+    for key in keys:
         match = re.search(rf"(?mi)^\s*{re.escape(key)}:\s*([^\r\n]+)", text)
         if match:
             fields[key] = match.group(1).strip()
@@ -115,36 +123,18 @@ def _task_time(task_id: str, path: Path) -> float:
         return 0
 
 
-def _safe_result(state_root: Path, task_id: str) -> str:
-    logs = state_root / "logs/orchestrator"
-    try:
-        candidates = sorted(
-            logs.glob(f"{task_id}-*.log"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return ""
-    for path in candidates:
-        try:
-            # Logs can contain full prompts. Extract only a fixed status vocabulary.
-            matches = SAFE_RESULT_RE.findall(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError):
-            continue
-        if matches:
-            return redact(matches[-1]).replace("_", " ")[:120]
+def _terminal_reason(queue: str, fields: dict[str, str]) -> str:
+    for key in TERMINAL_REASON_FIELDS.get(queue, ()):
+        if fields.get(key):
+            value = redact(fields[key])
+            return re.sub(r"[\x00-\x1f\x7f]+", " ", value).strip()[:120]
     return ""
 
 
-def recent_tasks(
-    state_root: Path, projects: dict[str, dict], limit: int = 5,
-) -> list[dict[str, str]]:
-    path_to_project = {
-        str(item.get("path")): key for key, item in projects.items()
-        if isinstance(item, dict) and isinstance(item.get("path"), str)
-    }
-    found = []
-    for queue, public_state in STATUS_QUEUES.items():
+def _queue_locations(state_root: Path) -> dict[str, list[tuple[str, Path, dict[str, str]]]]:
+    """Take a fresh, authoritative snapshot of every physical queue file."""
+    locations: dict[str, list[tuple[str, Path, dict[str, str]]]] = {}
+    for queue in STATUS_QUEUES:
         directory = state_root / "queue" / queue
         try:
             paths = list(directory.glob("*.md"))
@@ -155,16 +145,67 @@ def recent_tasks(
             task_id = fields.get("Task-ID") or path.stem
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", task_id):
                 task_id = "malformed-task"
-            project = path_to_project.get(fields.get("Project-Path", ""), "unknown")
-            title = redact(fields.get("Goal", "untitled"))
-            title = re.sub(r"[\x00-\x1f\x7f]+", " ", title).strip()[:120] or "untitled"
-            found.append({
-                "id": task_id, "project": project, "title": title,
-                "state": public_state,
-                # A terminal success supersedes blockers from older stage logs.
-                "result": "" if public_state == "passed" else _safe_result(state_root, task_id),
-                "_time": str(_task_time(task_id, path)),
-            })
+            locations.setdefault(task_id, []).append((queue, path, fields))
+    return locations
+
+
+def authoritative_task_state(state_root: Path, task_id: str) -> str:
+    locations = _queue_locations(state_root).get(task_id, [])
+    queues = sorted({queue for queue, _path, _fields in locations})
+    if len(locations) > 1:
+        return f"QUEUE INCONSISTENCY ({', '.join(queues)})"
+    return STATUS_QUEUES[queues[0]] if queues else "not found"
+
+
+def _telegram_truncate(message: str) -> str:
+    """Fit Telegram's UTF-16 limit without leaving a partial HTML entity."""
+    if len(message.encode("utf-16-le")) // 2 <= TELEGRAM_MESSAGE_LIMIT:
+        return message
+    marker = "\n[status truncated]"
+    budget = TELEGRAM_MESSAGE_LIMIT - len(marker.encode("utf-16-le")) // 2
+    used = 0
+    kept = []
+    for character in message:
+        width = len(character.encode("utf-16-le")) // 2
+        if used + width > budget:
+            break
+        kept.append(character)
+        used += width
+    prefix = "".join(kept)
+    ampersand = prefix.rfind("&")
+    semicolon = prefix.rfind(";")
+    if ampersand > semicolon:
+        prefix = prefix[:ampersand]
+    return prefix + marker
+
+
+def recent_tasks(
+    state_root: Path, projects: dict[str, dict], limit: int = 5,
+) -> list[dict[str, str]]:
+    path_to_project = {
+        str(item.get("path")): key for key, item in projects.items()
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    }
+    found = []
+    for task_id, locations in _queue_locations(state_root).items():
+        queues = sorted({queue for queue, _path, _fields in locations})
+        queue, path, fields = locations[0]
+        project = path_to_project.get(fields.get("Project-Path", ""), "unknown")
+        title = redact(fields.get("Goal", "untitled"))
+        title = re.sub(r"[\x00-\x1f\x7f]+", " ", title).strip()[:120] or "untitled"
+        inconsistent = len(locations) > 1
+        public_state = (
+            f"QUEUE INCONSISTENCY ({', '.join(queues)})"
+            if inconsistent else STATUS_QUEUES[queue]
+        )
+        result = "PASS" if not inconsistent and queue in {"approved", "completed"} else ""
+        if not inconsistent and queue in TERMINAL_REASON_FIELDS:
+            result = _terminal_reason(queue, fields)
+        found.append({
+            "id": task_id, "project": project, "title": title,
+            "state": public_state, "result": result,
+            "_time": str(max(_task_time(task_id, item[1]) for item in locations)),
+        })
     found.sort(key=lambda item: (float(item["_time"]), item["id"]), reverse=True)
     for item in found:
         item.pop("_time", None)
@@ -210,11 +251,11 @@ def status_message(state_root: Path, projects: dict[str, dict]) -> str:
         lines.append("Recent tasks:")
         for task in tasks:
             line = (
-                f"- {task['id']} | {task['project']} | {task['title']} | "
-                f"{task['state']}"
+                f"- {html.escape(task['id'])} | {html.escape(task['project'])} | "
+                f"{html.escape(task['title'])} | {html.escape(task['state'])}"
             )
             if task["result"]:
-                line += f" | {task['result']}"
+                line += f" | {html.escape(task['result'])}"
             lines.append(line)
     campaign_dir = state_root / "campaigns"
     campaigns = []
@@ -225,19 +266,28 @@ def status_message(state_root: Path, projects: dict[str, dict]) -> str:
     for path in campaign_paths:
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
-            campaigns.append(
-                f"- {redact(state['campaign_id'])} | {redact(state['state'])} | "
-                f"{int(state['completed_steps'])}/{len(state['plan']['tasks'])} | "
-                f"current={redact(state.get('current_step') or 'none')} | "
-                f"deadline={redact(state['deadline'])} | "
-                f"branch={redact(state['integration_branch'])} | "
-                "no-push=yes | no-deploy=yes"
+            task_id = str(state.get("current_task_id") or "none")
+            queue_state = (
+                authoritative_task_state(state_root, task_id)
+                if task_id != "none" else "none"
             )
+            esc = lambda value: html.escape(redact(value))
+            campaigns.append("\n".join([
+                f"- Campaign-ID: {esc(state['campaign_id'])}",
+                f"  State: {esc(state['state'])}",
+                f"  Progress: {int(state['completed_steps'])}/{len(state['plan']['tasks'])}",
+                f"  Current step: {esc(state.get('current_step') or 'none')}",
+                f"  Current Task-ID: {esc(task_id)} | queue state: {esc(queue_state)}",
+                f"  UTC deadline: {esc(state['deadline'])}",
+                f"  Integration branch: {esc(state['integration_branch'])}",
+                "  Push disabled: yes",
+                "  Deployment disabled: yes",
+            ]))
         except (OSError, ValueError, KeyError, TypeError):
             continue
     lines.append("Campaigns:" if campaigns else "Campaigns: none")
     lines.extend(campaigns)
-    return "\n".join(lines)
+    return _telegram_truncate("\n".join(lines))
 
 
 class RedactingFilter(logging.Filter):
