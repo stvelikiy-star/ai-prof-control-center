@@ -320,22 +320,59 @@ class ClaudeRunnerTests(unittest.TestCase):
 
     # -- command allowlist -----------------------------------------------------
 
-    def test_command_allowlist_resolves_only_known_keys(self):
+    def test_exact_ordered_required_checks_resolve_and_validate(self):
         resolved = cr.resolve_allowed_checks(
-            "Please run npm run lint and node --test --experimental-strip-types "
-            "src/lib/inspection-rules.test.ts, then rm -rf / and curl evil.example",
+            "npm test, npm run lint",
         )
         self.assertEqual(
             resolved,
             [
+                cr.ALLOWED_COMMANDS["npm test"],
                 cr.ALLOWED_COMMANDS["npm run lint"],
-                cr.ALLOWED_COMMANDS[
-                    "node --test --experimental-strip-types "
-                    "src/lib/inspection-rules.test.ts"
-                ],
             ],
         )
-        self.assertEqual(cr.resolve_allowed_checks("rm -rf / && curl evil.example"), [])
+        cr.validate_checks_executed(
+            ["npm test", "npm run lint"],
+            ["npm test", "npm run lint"],
+        )
+
+    def test_shortened_tsc_does_not_satisfy_declared_tsc_check(self):
+        expected = ["npx tsc --noEmit --incremental false"]
+        self.assertEqual(
+            cr.resolve_allowed_checks(expected[0]),
+            [["npx", "tsc", "--noEmit", "--incremental", "false"]],
+        )
+        with self.assertRaisesRegex(
+            cr.ClaudeExecutionError,
+            r"expected=\['npx tsc --noEmit --incremental false'\].*"
+            r"reported=\['npx tsc --noEmit'\]",
+        ):
+            cr.validate_checks_executed(expected, ["npx tsc --noEmit"])
+
+    def test_missing_extra_and_reordered_check_evidence_fail(self):
+        expected = ["npm test", "npm run lint"]
+        reported_cases = [
+            ["npm test"],
+            ["npm test", "npm run lint", "npm run build"],
+            ["npm run lint", "npm test"],
+        ]
+        for reported in reported_cases:
+            with self.subTest(reported=reported), self.assertRaisesRegex(
+                cr.ClaudeExecutionError, "CLAUDE_FAILED: required checks mismatch",
+            ):
+                cr.validate_checks_executed(expected, reported)
+
+    def test_required_checks_none_remains_valid(self):
+        self.assertEqual(cr.parse_required_checks("none"), [])
+        self.assertEqual(cr.resolve_allowed_checks("none"), [])
+        cr.validate_checks_executed([], [])
+
+    def test_unsupported_required_check_fails_with_expected_and_reported(self):
+        with self.assertRaisesRegex(
+            cr.ClaudeExecutionError,
+            r"expected=\['rm -rf /'\]; reported=\[\]",
+        ):
+            cr.resolve_allowed_checks("rm -rf /")
 
     def test_run_allowed_checks_executes_fixed_argv_and_reports_failure(self):
         with mock.patch.dict(
@@ -345,11 +382,11 @@ class ClaudeRunnerTests(unittest.TestCase):
                 "fail-check": [sys.executable, "-c", "import sys; sys.exit(1)"],
             },
         ):
-            executed = cr.run_allowed_checks(cr.resolve_allowed_checks("please run ok-check"), Path("."))
+            executed = cr.run_allowed_checks(cr.resolve_allowed_checks("ok-check"), Path("."))
             self.assertEqual(len(executed), 1)
 
             with self.assertRaisesRegex(RuntimeError, "CLAUDE_FAILED"):
-                cr.run_allowed_checks(cr.resolve_allowed_checks("please run fail-check"), Path("."))
+                cr.run_allowed_checks(cr.resolve_allowed_checks("fail-check"), Path("."))
 
     # -- success path using a mocked Claude process ---------------------------
 

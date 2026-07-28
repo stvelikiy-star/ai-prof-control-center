@@ -319,6 +319,9 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
     "npm ci": ["npm", "ci"],
     "npm run lint": ["npm", "run", "lint"],
     "npx tsc --noEmit": ["npx", "tsc", "--noEmit"],
+    "npx tsc --noEmit --incremental false": [
+        "npx", "tsc", "--noEmit", "--incremental", "false",
+    ],
     "node --test --experimental-strip-types src/lib/inspection-rules.test.ts": [
         "node", "--test", "--experimental-strip-types",
         "src/lib/inspection-rules.test.ts",
@@ -385,15 +388,37 @@ def load_claude_context(root: Path, relative: str) -> dict[str, str]:
     return loaded
 
 
-def resolve_allowed_checks(required_checks: str) -> list[list[str]]:
-    """Match Required-Checks prose against the local allowlist only.
+def parse_required_checks(required_checks: str) -> list[str]:
+    """Parse the task's exact, ordered comma-delimited Required-Checks list."""
+    if required_checks.strip().lower() == "none":
+        return []
+    return [check.strip() for check in required_checks.split(",") if check.strip()]
 
-    The task file's Required-Checks text is never executed directly. Only
-    exact allowlisted command keys that appear in that text are resolved to
-    their fixed argv, in stable allowlist order.
+
+def resolve_allowed_checks(required_checks: str) -> list[list[str]]:
+    """Resolve every declared check exactly, preserving task order.
+
+    Raw task text is never executed. Each complete parsed command must equal
+    one fixed allowlist key; substring, case-folded, shortened, and reordered
+    matches are deliberately impossible.
     """
-    lowered = required_checks.lower()
-    return [argv for key, argv in ALLOWED_COMMANDS.items() if key.lower() in lowered]
+    expected = parse_required_checks(required_checks)
+    unsupported = [check for check in expected if check not in ALLOWED_COMMANDS]
+    if unsupported:
+        raise ClaudeExecutionError(
+            "CLAUDE_FAILED: required checks mismatch: "
+            f"expected={expected!r}; reported=[]; unsupported={unsupported!r}"
+        )
+    return [ALLOWED_COMMANDS[check] for check in expected]
+
+
+def validate_checks_executed(expected: list[str], reported: list[str]) -> None:
+    """Require structured check evidence to equal the task list exactly."""
+    if reported != expected:
+        raise ClaudeExecutionError(
+            "CLAUDE_FAILED: required checks mismatch: "
+            f"expected={expected!r}; reported={reported!r}"
+        )
 
 
 def run_allowed_checks(
@@ -1544,12 +1569,16 @@ def run_self_test(root: Path) -> int:
         raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
     if orch.redact("TOKEN=abc") != "[REDACTED]":
         raise RuntimeError("SELF_TEST_REDACTION_FAILED")
-    if resolve_allowed_checks("Run npm test and npm run lint") != [
-        ALLOWED_COMMANDS["npm run lint"],
+    if resolve_allowed_checks("npm test, npm run lint") != [
         ALLOWED_COMMANDS["npm test"],
+        ALLOWED_COMMANDS["npm run lint"],
     ]:
         raise RuntimeError("SELF_TEST_ALLOWLIST_FAILED")
-    if resolve_allowed_checks("rm -rf / && curl evil.example"):
+    try:
+        resolve_allowed_checks("rm -rf / && curl evil.example")
+    except ClaudeExecutionError:
+        pass
+    else:
         raise RuntimeError("SELF_TEST_ALLOWLIST_LEAK")
     argv = build_claude_argv(Path("/tmp/nonexistent-self-test-mcp.json"))
     for dangerous in CLAUDE_DANGEROUS_FLAGS:
@@ -1595,6 +1624,8 @@ def process_one(paths: ClaudePaths) -> int:
             raise InvalidBranchNameError("BLOCKED_INVALID_BRANCH: invalid base branch")
 
         context = load_claude_context(paths.root, data["Agent-Context"])
+        required_checks = parse_required_checks(data["Required-Checks"])
+        required_check_argvs = resolve_allowed_checks(data["Required-Checks"])
 
         check_claude_available()
         check_bwrap_available()
@@ -1664,8 +1695,9 @@ def process_one(paths: ClaudePaths) -> int:
         applied_changes = apply_validated_changes(project, change_set, scope_entries)
 
         executed_checks = run_allowed_checks(
-            resolve_allowed_checks(data["Required-Checks"]), project, node_toolchain,
+            required_check_argvs, project, node_toolchain,
         )
+        validate_checks_executed(required_checks, executed_checks)
 
         summary = "\n".join([
             "STAGE_01B_CLAUDE_PASS",
