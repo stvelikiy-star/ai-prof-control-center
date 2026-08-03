@@ -129,7 +129,8 @@ def child_commands(root: Path, runtime: Path) -> list[tuple[str, list[str]]]:
     return [
         ("operations", [python, str(root / "orchestrator/operations_runner.py"), "--root", base, "--state-root", str(runtime)]),
         ("stage_01a", [python, str(root / "orchestrator/orchestrator.py"), "--root", base, "--state-root", str(runtime)]),
-        ("claude", [python, str(root / "orchestrator/claude_runner.py"), "--root", base, "--state-root", str(runtime)]),
+        ("auto_repair", [python, str(root / "orchestrator/auto_repair_runner.py"), "--root", base, "--state-root", str(runtime), "--once"]),
+        ("codex_stage_01b", [python, str(root / "orchestrator/codex_stage01b_runner.py"), "--root", base, "--state-root", str(runtime)]),
         ("codex", [python, str(root / "orchestrator/codex_runner.py"), "--root", base, "--state-root", str(runtime), "--once"]),
     ]
 
@@ -284,7 +285,7 @@ def run_self_test() -> int:
             raise RuntimeError("SELF_TEST_HEARTBEAT_FAILED")
         if redact("TOKEN=supersecret") != "[REDACTED]":
             raise RuntimeError("SELF_TEST_REDACTION_FAILED")
-        if [name for name, _ in child_commands(root, paths.state.parent)] != ["operations", "stage_01a", "claude", "codex"]:
+        if [name for name, _ in child_commands(root, paths.state.parent)] != ["operations", "stage_01a", "auto_repair", "codex_stage_01b", "codex"]:
             raise RuntimeError("SELF_TEST_STAGE_ORDER_FAILED")
         first = acquire_supervisor_lock(paths.lock)
         try:

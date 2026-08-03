@@ -570,6 +570,9 @@ Rules you must always follow:
 6. Independently audit the scoped diff for correctness, security, regressions, and compliance.
 7. A read-only filesystem limitation, including inability to write a cache or build artifact, is expected in Stage 01C and is not defect evidence. Do not return FAIL merely because a project check cannot be rerun.
 8. Return FAIL only when you identify an actual defect in the scoped implementation. Real implementation defects may and must still produce FAIL.
+8a. STAGE01C_MEDIA_EVIDENCE_POLICY_V2: For uploaded housekeeping photo evidence, do not demand impossible semantic proof or a custom complete JPEG/PNG decoder. Treat all of the following together as sufficient application-layer evidence unless the task explicitly requires full media decoding: authenticated staff and task binding, a server-enforced task/staff storage path, an existing nonzero bounded object, allowlisted image MIME type, matching image signature bytes, and non-executable storage/serving behavior.
+8b. Do not return FAIL solely because the implementation does not validate every JPEG coding table, PNG CRC, or decompress the full image payload. Full decode/re-encode is mandatory only when a trusted decoder is already available inside the approved scope or the task explicitly requires it.
+8c. Binary validation cannot prove that a photograph is genuine or operationally meaningful. Authenticity is enforced by assignment, before/after workflow, inspection, audit history, and human review; do not classify that inherent limitation as an implementation defect.
 9. Produce a concise evidence report citing exact file names and line numbers for every claim.
 10. The first non-empty line of your entire response must be exactly one of the following, and it may appear only once:
 # PASS
