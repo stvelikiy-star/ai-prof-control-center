@@ -261,18 +261,24 @@ def compute_codex_workspace_diff(
 
 
 def build_codex_implementation_input(bundle: str) -> str:
-    """Force Stage 01B to act as an implementation agent, not an auditor."""
+    """Run Codex as the Stage 01B implementation substitute for Claude."""
     return (
         _TRUSTED_HEADER
-        + "\n# MANDATORY IMPLEMENTATION MODE\n"
-        + "You are the implementation agent, not the audit agent. "
-        + "Directly edit the approved files in the current isolated workspace. "
-        + "Do not return only analysis, recommendations, a report, or a proposed patch. "
-        + "The task is incomplete unless the workspace contains actual scoped file changes. "
-        + "Resolve every supplied Codex audit defect in code and executable tests. "
-        + "If implementation is impossible, exit nonzero and state the exact blocker.\n\n"
+        + "\n"
         + bundle
+        + "\n\n# FINAL STAGE 01B EXECUTION DIRECTIVE\n"
+        + "For this invocation you are acting as the Stage 01B implementation "
+        + "agent in place of Claude Code. Statements in the project context "
+        + "saying that Codex is read-only or performs only an independent audit "
+        + "apply exclusively to the later Stage 01C audit and do not apply to "
+        + "this Stage 01B invocation. Directly edit the approved files in the "
+        + "current isolated workspace. Do not return only analysis, advice, a "
+        + "report, or a proposed patch. Resolve the requested defects in actual "
+        + "source files and executable tests. The run is incomplete unless the "
+        + "workspace contains a real scoped diff. If implementation is truly "
+        + "impossible, exit nonzero and report the exact blocker.\n"
     )
+
 
 
 def invoke_codex(
