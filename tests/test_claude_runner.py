@@ -405,6 +405,30 @@ class ClaudeRunnerTests(unittest.TestCase):
         ):
             cr.resolve_allowed_checks("rm -rf /")
 
+    def test_holds_availability_check_is_exactly_allowlisted(self):
+        command = (
+            "node --test --experimental-strip-types "
+            "src/lib/holds-availability.test.ts"
+        )
+        self.assertEqual(
+            cr.resolve_allowed_checks(command),
+            [[
+                "node",
+                "--test",
+                "--experimental-strip-types",
+                "src/lib/holds-availability.test.ts",
+            ]],
+        )
+
+        with self.assertRaisesRegex(
+            cr.ClaudeExecutionError,
+            "required checks mismatch",
+        ):
+            cr.resolve_allowed_checks(
+                "node --test --experimental-strip-types "
+                "src/lib/arbitrary.test.ts"
+            )
+
     def test_run_allowed_checks_executes_fixed_argv_and_reports_failure(self):
         with mock.patch.dict(
             cr.ALLOWED_COMMANDS,
