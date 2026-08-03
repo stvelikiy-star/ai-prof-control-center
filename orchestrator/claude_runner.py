@@ -394,6 +394,10 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
         "node", "--test", "--experimental-strip-types",
         "src/lib/holds-availability.test.ts",
     ],
+    "node --test supabase/migrations/availability-hold-security.contract.test.mjs": [
+        "node", "--test",
+        "supabase/migrations/availability-hold-security.contract.test.mjs",
+    ],
     "npm run build": ["npm", "run", "build"],
     "npm test": ["npm", "test"],
     "python3 -m pytest": ["python3", "-m", "pytest"],

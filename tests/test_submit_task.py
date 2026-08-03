@@ -83,7 +83,12 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertIn(
             "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
             "node --test --experimental-strip-types "
-            "src/lib/inspection-rules.test.ts, npm run build",
+            "src/lib/inspection-rules.test.ts, "
+            "node --test --experimental-strip-types "
+            "src/lib/holds-availability.test.ts, "
+            "node --test "
+            "supabase/migrations/availability-hold-security.contract.test.mjs, "
+            "npm run build",
             text,
         )
         self.assertNotIn("npm test", text)
