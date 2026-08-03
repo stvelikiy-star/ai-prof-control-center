@@ -186,5 +186,75 @@ class CampaignRunnerTests(unittest.TestCase):
             self.assertTrue(approved.exists())
 
 
+
+class CampaignLocalMigrationScopeTests(unittest.TestCase):
+    def test_only_root_supabase_migrations_is_allowed(self):
+        allowed = (
+            "supabase/migrations",
+            "supabase/migrations/20260804000100_fix.sql",
+            "supabase/migrations/hold.contract.test.mjs",
+        )
+        for value in allowed:
+            with self.subTest(value=value):
+                self.assertFalse(
+                    campaign.campaign_path_is_forbidden(value)
+                )
+
+    def test_other_database_and_sensitive_paths_remain_forbidden(self):
+        forbidden = (
+            "supabase",
+            "supabase/functions/task.ts",
+            "supabase/.temp/config",
+            "migrations/file.sql",
+            "src/migrations/file.sql",
+            "other/supabase/migrations/file.sql",
+            "supabase/migrations/secrets/file.sql",
+            "supabase/migrations/.env",
+            "../supabase/migrations/file.sql",
+            "/supabase/migrations/file.sql",
+        )
+        for value in forbidden:
+            with self.subTest(value=value):
+                self.assertTrue(
+                    campaign.campaign_path_is_forbidden(value)
+                )
+
+    def test_plan_accepts_local_migration_scope_only(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        task = {
+            "key": "g00b",
+            "title": "Local corrective migration",
+            "instructions": "Prepare and test local SQL only.",
+            "scope": ["supabase/migrations"],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.json"
+
+            plan.write_text(
+                json.dumps({"version": 1, "tasks": [task]}),
+                encoding="utf-8",
+            )
+            loaded = campaign.load_plan(plan)
+            self.assertEqual(
+                loaded["tasks"][0]["scope"],
+                ["supabase/migrations"],
+            )
+
+            task["scope"] = ["supabase/functions"]
+            plan.write_text(
+                json.dumps({"version": 1, "tasks": [task]}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                campaign.CampaignError,
+                "forbidden path",
+            ):
+                campaign.load_plan(plan)
+
 if __name__ == "__main__":
     unittest.main()

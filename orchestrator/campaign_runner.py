@@ -25,8 +25,9 @@ CAMPAIGN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$")
 MAX_LOG_BYTES = 131072
 FINAL_STATES = {"completed", "deadline_reached", "blocked"}
 FORBIDDEN_CAMPAIGN_SCOPE_PARTS = {
-    ".env", "credentials", "secrets", "supabase", "migrations",
+    ".env", "credentials", "secrets",
 }
+LOCAL_MIGRATION_SCOPE_PREFIX = ("supabase", "migrations")
 QUEUE_NAMES = (
     "pending", "active", "review", "pending_codex", "approved",
     "blocked", "failed", "cancelled", "completed",
@@ -35,6 +36,30 @@ QUEUE_NAMES = (
 
 class CampaignError(RuntimeError):
     pass
+
+
+def campaign_path_is_forbidden(raw_path: str) -> bool:
+    """Allow only reviewed local SQL artifacts under supabase/migrations.
+
+    This does not execute, apply, push, deploy, or connect to a database.
+    Every other Supabase path and every credential-like path stays blocked.
+    """
+    path = PurePosixPath(raw_path)
+    parts = tuple(part.casefold() for part in path.parts)
+
+    if path.is_absolute() or ".." in path.parts:
+        return True
+
+    if any(part in FORBIDDEN_CAMPAIGN_SCOPE_PARTS for part in parts):
+        return True
+
+    contains_database_namespace = (
+        "supabase" in parts or "migrations" in parts
+    )
+    if contains_database_namespace:
+        return parts[:2] != LOCAL_MIGRATION_SCOPE_PREFIX
+
+    return False
 
 
 def now_utc() -> datetime:
@@ -125,9 +150,8 @@ def load_plan(path: Path) -> dict:
         submit_task.validate_text("title", task["title"], submit_task.TITLE_LIMIT)
         submit_task.validate_text("instructions", task["instructions"], submit_task.INSTRUCTION_LIMIT)
         for raw_scope in task["scope"]:
-            parts = {part.lower() for part in PurePosixPath(raw_scope).parts}
-            if parts & FORBIDDEN_CAMPAIGN_SCOPE_PARTS:
-                raise CampaignError("campaign scope may not include migrations or credentials")
+            if campaign_path_is_forbidden(raw_scope):
+                raise CampaignError("campaign scope contains a forbidden path")
     return plan
 
 
@@ -323,11 +347,8 @@ def complete_approved(root: Path, state_root: Path, state: dict, task_path: Path
     outside = [path for path in changes if not path_in_scope(path, scopes)]
     if outside:
         raise CampaignError("change outside Scope-Files")
-    if any(
-        {part.lower() for part in PurePosixPath(path).parts} & FORBIDDEN_CAMPAIGN_SCOPE_PARTS
-        for path in changes
-    ):
-        raise CampaignError("migration or credential changes are forbidden")
+    if any(campaign_path_is_forbidden(path) for path in changes):
+        raise CampaignError("campaign produced a forbidden path change")
     integration = state["integration_branch"]
     if integration in {"main", "develop"} or integration not in local_integration_branches(project):
         raise CampaignError("unsafe integration branch")
