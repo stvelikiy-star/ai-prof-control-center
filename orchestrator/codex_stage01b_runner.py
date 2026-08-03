@@ -242,6 +242,39 @@ def invoke_codex_once(
     return result, evidence
 
 
+_ORIGINAL_COMPUTE_WORKSPACE_DIFF = core.compute_workspace_diff
+
+
+def compute_codex_workspace_diff(
+    workspace_dir: Path,
+    before: dict[str, str],
+) -> dict[str, str]:
+    changes = _ORIGINAL_COMPUTE_WORKSPACE_DIFF(workspace_dir, before)
+
+    if not changes:
+        raise CodexExecutionError(
+            "BLOCKED_EMPTY_IMPLEMENTATION_DIFF: Codex Stage 01B "
+            "produced no scoped file changes"
+        )
+
+    return changes
+
+
+def build_codex_implementation_input(bundle: str) -> str:
+    """Force Stage 01B to act as an implementation agent, not an auditor."""
+    return (
+        _TRUSTED_HEADER
+        + "\n# MANDATORY IMPLEMENTATION MODE\n"
+        + "You are the implementation agent, not the audit agent. "
+        + "Directly edit the approved files in the current isolated workspace. "
+        + "Do not return only analysis, recommendations, a report, or a proposed patch. "
+        + "The task is incomplete unless the workspace contains actual scoped file changes. "
+        + "Resolve every supplied Codex audit defect in code and executable tests. "
+        + "If implementation is impossible, exit nonzero and state the exact blocker.\n\n"
+        + bundle
+    )
+
+
 def invoke_codex(
     bundle: str,
     workspace: Path,
@@ -259,7 +292,7 @@ def invoke_codex(
     try:
         return subprocess.run(
             argv,
-            input=_TRUSTED_HEADER + bundle,
+            input=build_codex_implementation_input(bundle),
             text=True,
             capture_output=True,
             timeout=CODEX_TIMEOUT_SECONDS,
@@ -686,6 +719,7 @@ core.invoke_claude_with_retries = invoke_codex_once
 core.is_claude_auth_failure = is_codex_auth_failure
 core.is_claude_permission_failure = is_codex_permission_failure
 core.audit_workspace_integrity = audit_workspace_integrity_with_codex_normalization
+core.compute_workspace_diff = compute_codex_workspace_diff
 
 
 def main() -> int:
