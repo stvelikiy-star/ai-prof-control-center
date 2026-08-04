@@ -24,7 +24,7 @@
       "project_id": "ak-bermet",
       "path": "/home/agent/projects/ak-bermet",
       "enabled": true,
-      "base_branch": "develop",
+      "base_branch": "integration/ak-bermet-3day",
       "allowed_base_branches": [
         "develop",
         "integration/ak-bermet-3day"
