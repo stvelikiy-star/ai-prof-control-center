@@ -27,6 +27,7 @@ CONFIG_PATH = Path.home() / ".config/ai-prof-control-center/telegram.env"
 STATE_DIR = Path.home() / ".local/state/ai-prof-control-center"
 OFFSET_PATH = STATE_DIR / "telegram-update-offset"
 SUBMIT_TASK = ROOT / "orchestrator/submit_task.py"
+RELEASE_FLOW = ROOT / "orchestrator/release_flow.py"
 PROJECTS_PATH = ROOT / "orchestrator/projects.json"
 ENV_KEYS = {
     "AI_PROF_TELEGRAM_BOT_TOKEN",
@@ -55,6 +56,7 @@ HELP = (
     "AI PROF commands:\n"
     "/ai help\n"
     "/ai status\n"
+    "/ai release <project> prepare\n"
     "/ai task <project> | <title> | <instructions>\n"
     "/ai task <text>  (project: ak-bermet)"
 )
@@ -357,6 +359,18 @@ def parse_command(text: object) -> Command | None:
         return Command("help")
     if remainder == "status":
         return Command("status")
+
+    release_parts = remainder.split()
+
+    if (
+        len(release_parts) == 3
+        and release_parts[0] == "release"
+        and release_parts[2] == "prepare"
+    ):
+        return Command("release", release_parts[1])
+
+    if release_parts and release_parts[0] == "release":
+        return Command("invalid")
     if not remainder.startswith("task"):
         return Command("invalid")
     payload = remainder[4:].strip()
@@ -483,6 +497,56 @@ def rejection_reason(
     return reason[:197] + "..." if len(reason) > 200 else reason
 
 
+
+def release_prepare_message(command: Command) -> str:
+    """Run safe release preparation through the existing Control Center."""
+
+    if not command.project:
+        raise BridgeError("release project is missing")
+
+    projects = load_projects()
+    project_id, _project = resolve_project(
+        command.project,
+        projects,
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RELEASE_FLOW),
+                "prepare",
+                "--project",
+                project_id,
+                "--root",
+                str(ROOT),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=1800,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BridgeError(
+            "release preparation is unavailable"
+        ) from exc
+
+    message = result.stdout.strip()
+
+    # Exit 2 means the preflight safely found a blocker.
+    if result.returncode not in {0, 2}:
+        raise BridgeError("release preparation failed")
+
+    if not message:
+        raise BridgeError(
+            "release preparation returned no report"
+        )
+
+    return _telegram_truncate(message)
+
+
 def submit(command: Command, projects: dict[str, dict]) -> tuple[str, str]:
     args, project_id = submit_arguments(command, projects)
     try:
@@ -571,6 +635,13 @@ def handle_update(update: object, config: Config, client: TelegramClient) -> Non
     elif command.name == "status":
         projects = load_projects()
         client.send(status_message(STATE_DIR, projects))
+    elif command.name == "release":
+        try:
+            client.send(release_prepare_message(command))
+        except BridgeError as exc:
+            client.send(
+                f"Release preparation failed: {redact(exc)}"
+            )
     elif command.name == "task":
         try:
             task_id, project_id = submit(command, load_projects())
