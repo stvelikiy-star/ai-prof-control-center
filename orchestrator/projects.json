@@ -95,7 +95,7 @@
           "npm",
           "npx",
           "supabase",
-          "pg_dump"
+          "docker"
         ],
         "required_environment": [
           "SUPABASE_ACCESS_TOKEN",
@@ -106,7 +106,7 @@
           "SUPABASE_SERVICE_ROLE_KEY"
         ],
         "secret_file": "/home/agent/.config/ai-prof-control-center/ak-bermet-release.env",
-        "backup_script": "/home/agent/projects/ai-prof-control-center/scripts/backup-ak-bermet.sh",
+        "backup_script": "/home/agent/projects/ak-bermet/supabase/migrations/ak-bermet-production-backup.sh",
         "backup_markers": [
           "ak-bermet",
           "supabase",
