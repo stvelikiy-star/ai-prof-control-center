@@ -146,5 +146,64 @@ class ReleaseFlowTests(unittest.TestCase):
         )
 
 
+    def test_prerequisite_blocker_skips_expensive_checks(self):
+        temp, root, _project = self.make_root(profile={})
+        self.addCleanup(temp.cleanup)
+
+        backup = root / "backup.sh"
+        backup.write_text(
+            "#!/bin/sh\n# ak-bermet supabase pg_dump\n",
+            encoding="utf-8",
+        )
+
+        registry_path = root / "orchestrator/projects.json"
+        registry = json.loads(
+            registry_path.read_text(encoding="utf-8")
+        )
+        registry["projects"][0]["release"] = {
+            "branch": "release",
+            "required_commands": ["git"],
+            "required_environment": ["MISSING_SECRET"],
+            "backup_script": str(backup),
+            "backup_markers": [
+                "ak-bermet",
+                "supabase",
+                "pg_dump",
+            ],
+            "checks": [
+                [
+                    "python3",
+                    "-c",
+                    "raise SystemExit(99)",
+                ],
+            ],
+        }
+        registry_path.write_text(
+            json.dumps(registry),
+            encoding="utf-8",
+        )
+
+        report = prepare(root, "test-project", environ={})
+
+        statuses = {
+            check["name"]: check["status"]
+            for check in report["checks"]
+        }
+
+        self.assertEqual(
+            report["state"],
+            "OWNER_ACTION_REQUIRED",
+        )
+        self.assertEqual(
+            statuses["release_check_1"],
+            "SKIPPED",
+        )
+        self.assertNotIn(
+            "RELEASE_CHECK_FAILED:1",
+            report["blockers"],
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()

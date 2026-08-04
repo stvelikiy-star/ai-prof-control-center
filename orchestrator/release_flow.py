@@ -234,6 +234,24 @@ def prepare(
     if not isinstance(configured_checks, list):
         raise ReleaseError("release checks must be a list")
 
+    # Fail fast: expensive tests and builds are pointless until the
+    # release environment, tools and backup contract are available.
+    if blockers:
+        for index, command in enumerate(configured_checks, start=1):
+            checks.append({
+                "name": f"release_check_{index}",
+                "status": "SKIPPED",
+                "command": command,
+            })
+
+        return {
+            "project": project_id,
+            "state": "OWNER_ACTION_REQUIRED",
+            "checks": checks,
+            "blockers": blockers,
+            "production_changed": False,
+        }
+
     for index, command in enumerate(configured_checks, start=1):
         if (
             not isinstance(command, list)
