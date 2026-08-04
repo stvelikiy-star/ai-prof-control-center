@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +25,9 @@ CHILD_TIMEOUT_SECONDS = 2100
 HEARTBEAT_INTERVAL_SECONDS = 15
 IDLE_INTERVAL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 300
+TELEGRAM_BRIDGE_POLL_SECONDS = 2.0
+TELEGRAM_BRIDGE_RESTART_SECONDS = 2.0
+TELEGRAM_BRIDGE_STOP_TIMEOUT_SECONDS = 10
 SELF_TEST_MARKER = "CONTROL_LOOP_SELF_TEST_PASS"
 
 SECRET_PATTERNS = (
@@ -239,37 +243,255 @@ def status(paths: ControlPaths) -> dict:
     }
 
 
-def run_daemon(paths: ControlPaths, timeout: int, idle_interval: float) -> int:
+
+def telegram_bridge_pid_path(paths: ControlPaths) -> Path:
+    return paths.state / "telegram-bridge.pid"
+
+
+def telegram_bridge_log_path(paths: ControlPaths) -> Path:
+    return (
+        paths.state.parent
+        / "logs"
+        / "telegram"
+        / "telegram-bridge.log"
+    )
+
+
+def append_telegram_bridge_log(
+    paths: ControlPaths,
+    message: str,
+) -> None:
+    log_path = telegram_bridge_log_path(paths)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"{utc_now()} {redact(message.rstrip())}\n"
+        )
+
+
+def start_telegram_bridge(
+    paths: ControlPaths,
+) -> subprocess.Popen[str]:
+    bridge = paths.root / "orchestrator/telegram_bridge.py"
+
+    if not bridge.is_file():
+        raise RuntimeError(
+            f"Telegram Bridge is unavailable: {bridge}"
+        )
+
+    log_path = telegram_bridge_log_path(paths)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    environment = {
+        **os.environ,
+        "PYTHONUNBUFFERED": "1",
+    }
+
+    with log_path.open("a", encoding="utf-8") as handle:
+        process = subprocess.Popen(
+            [sys.executable, str(bridge)],
+            cwd=paths.root,
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=environment,
+            close_fds=True,
+        )
+
+    atomic_write(
+        telegram_bridge_pid_path(paths),
+        f"{process.pid}\n",
+    )
+
+    append_telegram_bridge_log(
+        paths,
+        f"Telegram Bridge started: pid={process.pid}",
+    )
+
+    return process
+
+
+def stop_telegram_bridge(
+    paths: ControlPaths,
+    process: subprocess.Popen[str] | None,
+) -> None:
+    try:
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+            try:
+                process.wait(
+                    timeout=TELEGRAM_BRIDGE_STOP_TIMEOUT_SECONDS
+                )
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(
+                    timeout=TELEGRAM_BRIDGE_STOP_TIMEOUT_SECONDS
+                )
+    finally:
+        try:
+            telegram_bridge_pid_path(paths).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def supervise_telegram_bridge(
+    paths: ControlPaths,
+    stop_event: threading.Event,
+    *,
+    poll_interval: float = TELEGRAM_BRIDGE_POLL_SECONDS,
+    restart_delay: float = TELEGRAM_BRIDGE_RESTART_SECONDS,
+) -> None:
+    process: subprocess.Popen[str] | None = None
+    failures = 0
+
+    try:
+        while not stop_event.is_set():
+            if process is None:
+                try:
+                    process = start_telegram_bridge(paths)
+                except Exception as exc:
+                    failures += 1
+                    append_telegram_bridge_log(
+                        paths,
+                        "Telegram Bridge start failure: "
+                        f"{type(exc).__name__}: {exc}",
+                    )
+
+                    delay = min(
+                        MAX_BACKOFF_SECONDS,
+                        max(
+                            restart_delay,
+                            2 ** min(failures, 8),
+                        ),
+                    )
+                    stop_event.wait(delay)
+                    continue
+
+            return_code = process.poll()
+
+            if return_code is not None:
+                failures += 1
+
+                append_telegram_bridge_log(
+                    paths,
+                    "Telegram Bridge exited: "
+                    f"pid={process.pid} code={return_code}",
+                )
+
+                try:
+                    telegram_bridge_pid_path(paths).unlink()
+                except FileNotFoundError:
+                    pass
+
+                process = None
+
+                delay = min(
+                    MAX_BACKOFF_SECONDS,
+                    max(
+                        restart_delay,
+                        2 ** min(failures, 8),
+                    ),
+                )
+                stop_event.wait(delay)
+                continue
+
+            failures = 0
+            stop_event.wait(poll_interval)
+    finally:
+        stop_telegram_bridge(paths, process)
+
+
+def run_daemon(
+    paths: ControlPaths,
+    timeout: int,
+    idle_interval: float,
+) -> int:
     try:
         paths.stop.unlink()
     except FileNotFoundError:
         pass
+
     failures = 0
     atomic_write(paths.pid, f"{os.getpid()}\n")
-    write_heartbeat(paths, state="idle", consecutive_failures=0)
+    write_heartbeat(
+        paths,
+        state="idle",
+        consecutive_failures=0,
+    )
+
+    telegram_stop = threading.Event()
+    telegram_thread = threading.Thread(
+        target=supervise_telegram_bridge,
+        args=(paths, telegram_stop),
+        name="telegram-bridge-supervisor",
+        daemon=True,
+    )
+    telegram_thread.start()
+
     try:
         while not paths.stop.exists():
             if paths.pause.exists():
-                write_heartbeat(paths, state="paused", stage=None)
-                time.sleep(min(idle_interval, HEARTBEAT_INTERVAL_SECONDS))
+                write_heartbeat(
+                    paths,
+                    state="paused",
+                    stage=None,
+                )
+                time.sleep(
+                    min(
+                        idle_interval,
+                        HEARTBEAT_INTERVAL_SECONDS,
+                    )
+                )
                 continue
+
             result = run_cycle(paths, timeout)
+
             if result == 0:
                 failures = 0
                 delay = idle_interval
             else:
                 failures += 1
-                delay = min(MAX_BACKOFF_SECONDS, max(idle_interval, 2 ** min(failures, 8)))
-            write_heartbeat(paths, consecutive_failures=failures, backoff_seconds=delay)
+                delay = min(
+                    MAX_BACKOFF_SECONDS,
+                    max(
+                        idle_interval,
+                        2 ** min(failures, 8),
+                    ),
+                )
+
+            write_heartbeat(
+                paths,
+                consecutive_failures=failures,
+                backoff_seconds=delay,
+            )
             time.sleep(delay)
-        write_heartbeat(paths, state="stopped", stage=None)
+
+        write_heartbeat(
+            paths,
+            state="stopped",
+            stage=None,
+        )
     finally:
+        telegram_stop.set()
+        telegram_thread.join(
+            timeout=(
+                TELEGRAM_BRIDGE_STOP_TIMEOUT_SECONDS
+                + 5
+            )
+        )
+
         for marker in (paths.stop, paths.pid):
             try:
                 marker.unlink()
             except FileNotFoundError:
                 pass
+
     return 0
+
+
 
 
 def run_self_test() -> int:
