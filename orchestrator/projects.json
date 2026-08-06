@@ -131,15 +131,14 @@
             "test:inspection"
           ],
           [
-            "node",
-            "--test",
-            "--experimental-strip-types",
-            "src/lib/holds-availability.test.ts"
+            "npm",
+            "run",
+            "test:housekeeping"
           ],
           [
-            "node",
-            "--test",
-            "supabase/migrations/availability-hold-security.contract.test.mjs"
+            "npm",
+            "run",
+            "test:technician"
           ],
           [
             "npm",
