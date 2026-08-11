@@ -24,8 +24,9 @@
       "project_id": "ak-bermet",
       "path": "/home/agent/projects/ak-bermet",
       "enabled": true,
-      "base_branch": "integration/ak-bermet-3day",
+      "base_branch": "main",
       "allowed_base_branches": [
+        "main",
         "develop",
         "integration/ak-bermet-3day"
       ],
@@ -87,7 +88,7 @@
       ],
       "code_toolchain": "nvm-node",
       "release": {
-        "branch": "integration/ak-bermet-3day",
+        "branch": "main",
         "required_commands": [
           "git",
           "python3",
