@@ -26,15 +26,63 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install sandbox dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+
+      - name: Prepare Ubuntu host-contract fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          make_repo() {
+            local path="$1"
+            local base="$2"
+            sudo mkdir -p "$path"
+            sudo chown -R "$USER:$USER" "$path"
+            if [ ! -d "$path/.git" ]; then
+              git -C "$path" init -q
+              git -C "$path" config user.email ci@example.invalid
+              git -C "$path" config user.name "AI PROF CI"
+              printf 'fixture\n' > "$path/README.md"
+              git -C "$path" add README.md
+              git -C "$path" commit -q -m fixture
+            fi
+            git -C "$path" branch -M "$base"
+          }
+
+          make_repo /home/agent/projects/ai-prof-pilot-runtime develop
+          make_repo /home/agent/projects/ak-bermet-agent-pilot develop
+          make_repo /home/agent/projects/ak-bermet main
+          git -C /home/agent/projects/ak-bermet branch develop || true
+          git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
+
+          cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
+          {
+            "scripts": {
+              "lint": "true",
+              "test:inspection": "true",
+              "test:housekeeping": "true",
+              "test:technician": "true",
+              "build": "true"
+            }
+          }
+          JSON
+
       - name: Python syntax check
         run: |
           python -m compileall -q orchestrator tests scripts
 
-      - name: Full unit/integration test suite
+      - name: Full test suite in repository-native isolation
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
         run: |
-          python -m unittest discover -s tests -p 'test_*.py' -v
+          set -euo pipefail
+          for test_file in tests/test_*.py; do
+            echo "===== $test_file ====="
+            python "$test_file"
+          done
 
       - name: Ensure no tracked bytecode
         run: |
