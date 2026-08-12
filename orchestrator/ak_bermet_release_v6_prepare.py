@@ -2,9 +2,10 @@
 """Read-only AK BERMET Production Activation V6 readiness probe.
 
 This module intentionally cannot migrate or deploy production. It verifies the
-frozen release SHA, repository cleanliness, application/release environment
-names, structural preflight, exact linked migration ledger, backup evidence,
-and public-site fingerprint. Unresolved production authority remains an
+frozen release SHA, repository cleanliness, Supabase/release environment names,
+structural preflight, exact linked migration ledger, backup evidence, and
+public-site fingerprint. Google Sheets is an optional secondary sync target and
+is not a production release gate. Unresolved production authority remains an
 explicit blocker.
 """
 from __future__ import annotations
@@ -22,9 +23,8 @@ from pathlib import Path
 
 PROJECT = Path("/home/agent/projects/ak-bermet")
 SECRET_FILE = Path("/home/agent/.config/ai-prof-control-center/ak-bermet-release.env")
-APP_ENV_FILE = PROJECT / ".env.local"
 BACKUP_ROOT = Path("/home/agent/ai-prof-backups/ak-bermet")
-FROZEN_SHA = "e26ced6a187a654baf858bc8b13044f4123f0a8a"
+FROZEN_SHA = "bd7912d4d5cd41603522c205e58b587d0063e6fe"
 PUBLIC_URL = "https://akbermet.kg/"
 NVM_NODE_VERSIONS = Path("/home/agent/.nvm/versions/node")
 
@@ -37,13 +37,6 @@ REQUIRED_RELEASE_ENV = (
     "SUPABASE_SERVICE_ROLE_KEY",
 )
 REQUIRED_ENV = REQUIRED_RELEASE_ENV  # backward-compatible test/API alias
-
-REQUIRED_APP_ENV = (
-    "GOOGLE_SHEETS_ENABLED",
-    "GOOGLE_SHEETS_SPREADSHEET_ID",
-    "GOOGLE_SERVICE_ACCOUNT_EMAIL",
-    "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY",
-)
 
 EXPECTED_MIGRATIONS = (
     "20260721000100",
@@ -186,29 +179,6 @@ def read_secret_environment() -> dict[str, str]:
     return values
 
 
-def read_app_environment() -> dict[str, str]:
-    try:
-        values = _read_allowlisted_environment(
-            APP_ENV_FILE,
-            REQUIRED_APP_ENV,
-            require_private_mode=True,
-        )
-    except PrepareBlocked as exc:
-        code = str(exc)
-        mapping = {
-            "ENVIRONMENT_FILE_UNAVAILABLE": "APP_ENVIRONMENT_FILE_UNAVAILABLE",
-            "ENVIRONMENT_FILE_INVALID": "APP_ENVIRONMENT_FILE_INVALID",
-            "ENVIRONMENT_FILE_MODE_INVALID": "APP_ENVIRONMENT_FILE_MODE_INVALID",
-            "ENVIRONMENT_FILE_FORMAT_INVALID": "APP_ENVIRONMENT_FILE_FORMAT_INVALID",
-        }
-        raise PrepareBlocked(mapping.get(code, code)) from exc
-    if any(not values.get(key) for key in REQUIRED_APP_ENV):
-        raise PrepareBlocked("APP_ENVIRONMENT_INCOMPLETE")
-    if values["GOOGLE_SHEETS_ENABLED"] != "true":
-        raise PrepareBlocked("GOOGLE_SHEETS_NOT_ENABLED_FOR_PRODUCTION")
-    return values
-
-
 def locate_node_bin() -> Path:
     candidates: list[tuple[tuple[int, int, int], Path]] = []
     try:
@@ -230,22 +200,20 @@ def locate_node_bin() -> Path:
 def validate_preflight(
     report: PrepareReport,
     release_env: dict[str, str],
-    app_env: dict[str, str],
 ) -> tuple[Path, dict[str, str]]:
-    """Run only structural preflight, then validate the V6 read-only env contract.
+    """Run the structural preflight with the Supabase-primary release env.
 
-    `npm run preflight:production` intentionally includes operator-only backup
-    gates such as AK_BERMET_BACKUP_APPROVED=YES. Those belong to the future
-    explicit backup action and must not be required or synthesized during a
-    read-only preparation probe.
+    The explicit production backup approval remains reserved for the future
+    backup action. Google Sheets credentials are intentionally absent because
+    Sheets is now an optional secondary sync destination, not durable storage.
     """
     node_bin = locate_node_bin()
     node = node_bin / "node"
-    env = clean_environment({**release_env, **app_env})
+    env = clean_environment(release_env)
     env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
     run([str(node), "scripts/production-preflight.mjs"], cwd=PROJECT, env=env)
     report.structural_preflight = "PASS"
-    report.production_preflight = "PASS_V6_ENV_CONTRACT"
+    report.production_preflight = "PASS_SUPABASE_PRIMARY_CONTRACT"
     return node, env
 
 
@@ -337,9 +305,8 @@ def prepare() -> PrepareReport:
     try:
         validate_repository(report)
         release_env = read_secret_environment()
-        app_env = read_app_environment()
         report.environment_names = "PASS"
-        node, env = validate_preflight(report, release_env, app_env)
+        node, env = validate_preflight(report, release_env)
         validate_migration_ledger(report, node, env)
         validate_backup_evidence(report)
         inspect_public_site(report)
