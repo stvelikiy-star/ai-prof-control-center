@@ -21,6 +21,65 @@
       "allow_deployment": false
     },
     {
+      "project_id": "ai-prof-control-center",
+      "path": "/home/agent/projects/ai-prof-control-center-maintenance",
+      "enabled": true,
+      "base_branch": "maintenance/base",
+      "allowed_base_branches": [
+        "maintenance/base"
+      ],
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "reports/**",
+        "tests/**",
+        ".github/workflows/**",
+        "systemd/**",
+        "orchestrator/telegram_bridge.py",
+        "orchestrator/telegram_bridge_v2.py",
+        "orchestrator/github_task_gateway.py"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "runtime/**",
+        "state/**",
+        "queue/**",
+        "orchestrator/config.json",
+        "orchestrator/projects.json",
+        "orchestrator/project_registry.py",
+        "orchestrator/submit_task.py",
+        "orchestrator/operation_profiles.py",
+        "orchestrator/operations_runner.py",
+        "orchestrator/release_flow.py",
+        "orchestrator/claude_runner.py",
+        "orchestrator/codex_runner.py",
+        "orchestrator/codex_stage01b_runner.py",
+        "orchestrator/control_loop.py"
+      ],
+      "agent_context": "agents/ai-prof-control-center",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20,
+      "code_required_commands": [
+        "git",
+        "python3"
+      ],
+      "code_required_checks": [
+        "python3 -m unittest"
+      ]
+    },
+    {
       "project_id": "ak-bermet",
       "path": "/home/agent/projects/ak-bermet",
       "enabled": true,
