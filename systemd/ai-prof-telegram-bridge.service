@@ -1,12 +1,12 @@
 [Unit]
-Description=AI PROF Telegram control bridge
+Description=AI PROF Telegram control bridge V2
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/agent/projects/ai-prof-control-center
-ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/telegram_bridge.py
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/telegram_bridge_v2.py
 Restart=on-failure
 RestartSec=15
 NoNewPrivileges=true
