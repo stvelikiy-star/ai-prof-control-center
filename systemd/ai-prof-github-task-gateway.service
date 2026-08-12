@@ -5,11 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=agent
+Group=agent
 WorkingDirectory=/home/agent/projects/ai-prof-control-center
 ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/github_task_gateway.py --poll-seconds 60
+Environment=HOME=/home/agent
+Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
+Environment=GH_CONFIG_DIR=/home/agent/.config/gh
+Environment=GH_PROMPT_DISABLED=1
 Restart=on-failure
 RestartSec=15
-Environment=GH_PROMPT_DISABLED=1
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
