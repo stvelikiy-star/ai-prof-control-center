@@ -12,7 +12,7 @@ Restart=on-failure
 RestartSec=15
 NoNewPrivileges=false
 # Bubblewrap must create its own user, mount, PID, IPC, UTS and cgroup
-# namespaces.  Keep these explicitly available even when the user manager
+# namespaces. Keep these explicitly available even when the user manager
 # has namespace hardening defaults; Bubblewrap remains the confinement
 # boundary and still drops the host filesystem with --tmpfs /.
 PrivateUsers=false
@@ -20,7 +20,7 @@ RestrictNamespaces=no
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/agent/.local/state/ai-prof-control-center /home/agent/projects/ai-prof-pilot-sandbox /home/agent/projects/ak-bermet
+ReadWritePaths=/home/agent/.local/state/ai-prof-control-center /home/agent/projects/ai-prof-pilot-sandbox /home/agent/projects/ak-bermet /home/agent/projects/ai-prof-control-center-maintenance
 UMask=0077
 
 [Install]
