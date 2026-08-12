@@ -5,15 +5,8 @@
       "project_id": "ai-prof-pilot",
       "path": "/home/agent/projects/ai-prof-pilot-runtime",
       "base_branch": "develop",
-      "work_prefixes": [
-        "feature/",
-        "fix/"
-      ],
-      "allowed_scope": [
-        "README.md",
-        "docs/**",
-        "tests/**"
-      ],
+      "work_prefixes": ["feature/", "fix/"],
+      "allowed_scope": ["README.md", "docs/**", "tests/**"],
       "agent_context": "agents/ai-prof-pilot",
       "allow_commits": false,
       "allow_push": false,
@@ -21,23 +14,69 @@
       "allow_deployment": false
     },
     {
+      "project_id": "ai-prof-control-center",
+      "path": "/home/agent/projects/ai-prof-control-center-maintenance",
+      "enabled": true,
+      "base_branch": "maintenance/base",
+      "allowed_base_branches": ["maintenance/base"],
+      "work_prefixes": ["feature/", "fix/"],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "reports/**",
+        "tests/test_telegram_bridge.py",
+        "tests/test_control_loop_telegram.py",
+        "tests/test_telegram_bridge_v2.py",
+        "tests/test_github_task_gateway.py",
+        "orchestrator/telegram_bridge.py",
+        "orchestrator/telegram_bridge_v2.py",
+        "orchestrator/github_task_gateway.py"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "runtime/**",
+        "state/**",
+        "queue/**",
+        ".github/workflows/**",
+        "systemd/**",
+        "test_control_center.py",
+        "tests/__init__.py",
+        "tests/test_self_maintenance_profile.py",
+        "orchestrator/config.json",
+        "orchestrator/projects.json",
+        "orchestrator/project_registry.py",
+        "orchestrator/submit_task.py",
+        "orchestrator/operation_profiles.py",
+        "orchestrator/operations_runner.py",
+        "orchestrator/release_flow.py",
+        "orchestrator/claude_runner.py",
+        "orchestrator/codex_runner.py",
+        "orchestrator/codex_stage01b_runner.py",
+        "orchestrator/control_loop.py"
+      ],
+      "agent_context": "agents/ai-prof-control-center",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20,
+      "code_required_commands": ["git", "python3"],
+      "code_required_checks": ["python3 -m unittest"]
+    },
+    {
       "project_id": "ak-bermet",
       "path": "/home/agent/projects/ak-bermet",
       "enabled": true,
       "base_branch": "main",
-      "allowed_base_branches": [
-        "main",
-        "develop",
-        "integration/ak-bermet-3day"
-      ],
-      "local_integration_branches": [
-        "integration/ak-bermet-3day"
-      ],
+      "allowed_base_branches": ["main", "develop", "integration/ak-bermet-3day"],
+      "local_integration_branches": ["integration/ak-bermet-3day"],
       "allow_local_campaign_merge": true,
-      "work_prefixes": [
-        "feature/",
-        "fix/"
-      ],
+      "work_prefixes": ["feature/", "fix/"],
       "allowed_scope": [
         "README.md",
         "docs/**",
@@ -71,13 +110,7 @@
       "allow_deployment": false,
       "require_clean_repository": true,
       "max_scope_files": 20,
-      "code_required_commands": [
-        "git",
-        "python3",
-        "node",
-        "npm",
-        "npx"
-      ],
+      "code_required_commands": ["git", "python3", "node", "npm", "npx"],
       "code_required_checks": [
         "npm run lint",
         "npx tsc --noEmit --incremental false",
@@ -89,15 +122,7 @@
       "code_toolchain": "nvm-node",
       "release": {
         "branch": "main",
-        "required_commands": [
-          "git",
-          "python3",
-          "node",
-          "npm",
-          "npx",
-          "supabase",
-          "docker"
-        ],
+        "required_commands": ["git", "python3", "node", "npm", "npx", "supabase", "docker"],
         "required_environment": [
           "SUPABASE_ACCESS_TOKEN",
           "SUPABASE_PROJECT_REF",
@@ -108,44 +133,14 @@
         ],
         "secret_file": "/home/agent/.config/ai-prof-control-center/ak-bermet-release.env",
         "backup_script": "/home/agent/projects/ak-bermet/supabase/migrations/ak-bermet-production-backup.sh",
-        "backup_markers": [
-          "ak-bermet",
-          "supabase",
-          "pg_dump"
-        ],
+        "backup_markers": ["ak-bermet", "supabase", "pg_dump"],
         "checks": [
-          [
-            "npm",
-            "run",
-            "lint"
-          ],
-          [
-            "npx",
-            "tsc",
-            "--noEmit",
-            "--incremental",
-            "false"
-          ],
-          [
-            "npm",
-            "run",
-            "test:inspection"
-          ],
-          [
-            "npm",
-            "run",
-            "test:housekeeping"
-          ],
-          [
-            "npm",
-            "run",
-            "test:technician"
-          ],
-          [
-            "npm",
-            "run",
-            "build"
-          ]
+          ["npm", "run", "lint"],
+          ["npx", "tsc", "--noEmit", "--incremental", "false"],
+          ["npm", "run", "test:inspection"],
+          ["npm", "run", "test:housekeeping"],
+          ["npm", "run", "test:technician"],
+          ["npm", "run", "build"]
         ]
       }
     },
@@ -154,16 +149,8 @@
       "path": "/home/agent/projects/ak-bermet-agent-pilot",
       "enabled": true,
       "base_branch": "develop",
-      "work_prefixes": [
-        "feature/",
-        "fix/"
-      ],
-      "allowed_scope": [
-        "README.md",
-        "docs/**",
-        "ai-system/**",
-        "tests/**"
-      ],
+      "work_prefixes": ["feature/", "fix/"],
+      "allowed_scope": ["README.md", "docs/**", "ai-system/**", "tests/**"],
       "forbidden_scope": [
         ".git/**",
         ".env",

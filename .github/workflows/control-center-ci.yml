@@ -5,6 +5,7 @@ on:
     branches:
       - fix/control-center-local-migration-campaign-guard
       - feature/self-maintenance-v1
+      - feature/self-maintenance-v1-main
   pull_request:
     branches:
       - main
@@ -54,6 +55,12 @@ jobs:
           make_repo /home/agent/projects/ai-prof-pilot-runtime develop
           make_repo /home/agent/projects/ak-bermet-agent-pilot develop
           make_repo /home/agent/projects/ak-bermet main
+          make_repo /home/agent/projects/ai-prof-control-center-maintenance maintenance/base
+
+          mkdir -p /home/agent/projects/ai-prof-control-center-maintenance/orchestrator
+          printf '# telegram fixture\n' > /home/agent/projects/ai-prof-control-center-maintenance/orchestrator/telegram_bridge.py
+          git -C /home/agent/projects/ai-prof-control-center-maintenance add orchestrator/telegram_bridge.py
+          git -C /home/agent/projects/ai-prof-control-center-maintenance commit -q -m 'add maintenance fixture'
 
           cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
           {
@@ -73,7 +80,7 @@ jobs:
 
       - name: Python syntax check
         run: |
-          python -m compileall -q orchestrator tests scripts
+          python -m compileall -q orchestrator tests scripts test_control_center.py
 
       - name: Full test suite in repository-native isolation
         env:
@@ -86,6 +93,13 @@ jobs:
             echo "===== $test_file ====="
             python "$test_file"
           done
+
+      - name: Self-maintenance exact unittest gate
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python3 -m unittest -v
 
       - name: Ensure no tracked bytecode
         run: |
