@@ -1,0 +1,112 @@
+name: AK BERMET Restore Smoke Integration
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/ak-bermet-supabase-restore-smoke.py'
+      - 'orchestrator/ak_bermet_release_v6_prepare.py'
+      - '.github/workflows/ak-bermet-restore-smoke-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore-smoke-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Control Center
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Prepare isolated AK BERMET fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /home/agent/projects/ak-bermet
+          sudo mkdir -p /home/agent/ai-prof-backups/ak-bermet/ci-restore
+          sudo chown -R "$USER:$USER" /home/agent/projects/ak-bermet /home/agent/ai-prof-backups
+
+          cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
+          {
+            "name": "ak-bermet-restore-ci",
+            "private": true,
+            "devDependencies": {
+              "supabase": "2.109.1"
+            }
+          }
+          JSON
+
+          cd /home/agent/projects/ak-bermet
+          npm install --no-audit --no-fund
+
+          cat > /home/agent/ai-prof-backups/ak-bermet/ci-restore/roles.sql <<'SQL'
+          ALTER ROLE anon SET statement_timeout = '2min';
+          SQL
+
+          cat > /home/agent/ai-prof-backups/ak-bermet/ci-restore/schema.sql <<'SQL'
+          CREATE TABLE public.rooms (id bigint PRIMARY KEY);
+          CREATE TABLE public.leads (id bigint PRIMARY KEY);
+          CREATE TABLE public.bookings (id bigint PRIMARY KEY);
+          CREATE TABLE public.cleaning_tasks (id bigint PRIMARY KEY);
+          CREATE TABLE public.maintenance_requests (id bigint PRIMARY KEY);
+          SQL
+
+          cat > /home/agent/ai-prof-backups/ak-bermet/ci-restore/data.sql <<'SQL'
+          INSERT INTO public.rooms VALUES (1);
+          INSERT INTO public.leads VALUES (1);
+          INSERT INTO public.bookings VALUES (1);
+          INSERT INTO public.cleaning_tasks VALUES (1);
+          INSERT INTO public.maintenance_requests VALUES (1);
+          SQL
+
+      - name: Run real Docker/Supabase restore smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ak-bermet-supabase-restore-smoke.py | tee /tmp/ak-bermet-restore-smoke-result.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/ak-bermet-restore-smoke-result.json').read_text())
+          assert payload['status'] == 'PASS', payload
+          assert payload['production_changed'] is False, payload
+          assert payload['backup'] == 'ci-restore', payload
+          assert set(payload['core_tables']) == {
+              'rooms',
+              'leads',
+              'bookings',
+              'cleaning_tasks',
+              'maintenance_requests',
+          }, payload
+          print('AK_BERMET_RESTORE_SMOKE_INTEGRATION: PASS')
+          PY
+
+          if docker ps -a --format '{{.Names}}' | grep -q '^supabase_db_ak-bermet-restore-'; then
+            echo 'Temporary Supabase DB container leaked after restore smoke.' >&2
+            docker ps -a --format '{{.Names}}' | grep '^supabase_db_ak-bermet-restore-' >&2 || true
+            exit 1
+          fi
+
+      - name: Cleanup runner Docker state
+        if: always()
+        shell: bash
+        run: |
+          ids="$(docker ps -aq --filter 'name=supabase_db_ak-bermet-restore-' || true)"
+          if [ -n "$ids" ]; then
+            docker rm -f $ids || true
+          fi
