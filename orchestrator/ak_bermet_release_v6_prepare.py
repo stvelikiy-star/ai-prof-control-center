@@ -3,8 +3,10 @@
 
 This module intentionally cannot migrate or deploy production. It verifies the
 frozen release SHA, repository cleanliness, Supabase/release environment names,
-structural preflight, exact linked migration ledger, backup evidence, and
-public-site fingerprint. Google Sheets is an optional secondary sync target and
+structural preflight, exact local + remote migration ledger, backup evidence,
+and public-site fingerprint. Remote migration history is read through the
+official Supabase Management API, avoiding a direct Postgres password/IPv6
+connection dependency. Google Sheets is an optional secondary sync target and
 is not a production release gate. Unresolved production authority remains an
 explicit blocker.
 """
@@ -18,7 +20,7 @@ import stat
 import subprocess
 import sys
 import urllib.request
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 PROJECT = Path("/home/agent/projects/ak-bermet")
@@ -26,6 +28,7 @@ SECRET_FILE = Path("/home/agent/.config/ai-prof-control-center/ak-bermet-release
 BACKUP_ROOT = Path("/home/agent/ai-prof-backups/ak-bermet")
 FROZEN_SHA = "bd7912d4d5cd41603522c205e58b587d0063e6fe"
 PUBLIC_URL = "https://akbermet.kg/"
+SUPABASE_MANAGEMENT_API = "https://api.supabase.com/v1"
 NVM_NODE_VERSIONS = Path("/home/agent/.nvm/versions/node")
 
 REQUIRED_RELEASE_ENV = (
@@ -59,6 +62,7 @@ EXPECTED_MIGRATIONS = (
     "20260728000100",
 )
 MIGRATION_RE = re.compile(r"(?<!\d)(\d{14})(?!\d)")
+PROJECT_REF_RE = re.compile(r"^[a-z0-9]{20}$")
 UNSAFE_ENV = {"NODE_OPTIONS", "NODE_PATH", "NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"}
 LEGACY_MARKERS = ("Hotel Prime", "Make Booking", "Proceed to checkout", "Сделать заказ")
 
@@ -91,7 +95,13 @@ class PrepareReport:
             self.blockers = []
 
 
-def run(argv: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: int = 900) -> subprocess.CompletedProcess[str]:
+def run(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    timeout: int = 900,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         argv,
         cwd=str(cwd),
@@ -103,8 +113,10 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeou
         env=env,
     )
     if result.returncode != 0:
-        detail = (result.stdout or result.stderr or "command failed").strip()
-        raise PrepareBlocked(f"READ_ONLY_COMMAND_FAILED:{Path(argv[0]).name}:{detail[:300]}")
+        detail = (result.stderr or result.stdout or "command failed").strip()
+        raise PrepareBlocked(
+            f"READ_ONLY_COMMAND_FAILED:{Path(argv[0]).name}:{detail[:300]}"
+        )
     return result
 
 
@@ -118,7 +130,12 @@ def clean_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def git_output(*args: str) -> str:
-    return run(["/usr/bin/git", *args], cwd=PROJECT, env=clean_environment(), timeout=60).stdout.strip()
+    return run(
+        ["/usr/bin/git", *args],
+        cwd=PROJECT,
+        env=clean_environment(),
+        timeout=60,
+    ).stdout.strip()
 
 
 def validate_repository(report: PrepareReport) -> None:
@@ -135,7 +152,12 @@ def validate_repository(report: PrepareReport) -> None:
         raise PrepareBlocked("PROJECT_WORKTREE_NOT_CLEAN")
 
 
-def _read_allowlisted_environment(path: Path, allowed: tuple[str, ...], *, require_private_mode: bool) -> dict[str, str]:
+def _read_allowlisted_environment(
+    path: Path,
+    allowed: tuple[str, ...],
+    *,
+    require_private_mode: bool,
+) -> dict[str, str]:
     try:
         info = path.stat()
     except OSError as exc:
@@ -176,6 +198,8 @@ def read_secret_environment() -> dict[str, str]:
         raise PrepareBlocked(mapping.get(code, code)) from exc
     if any(not values.get(key) for key in REQUIRED_RELEASE_ENV):
         raise PrepareBlocked("RELEASE_ENVIRONMENT_INCOMPLETE")
+    if not PROJECT_REF_RE.fullmatch(values["SUPABASE_PROJECT_REF"]):
+        raise PrepareBlocked("SUPABASE_PROJECT_REF_INVALID")
     return values
 
 
@@ -201,12 +225,7 @@ def validate_preflight(
     report: PrepareReport,
     release_env: dict[str, str],
 ) -> tuple[Path, dict[str, str]]:
-    """Run the structural preflight with the Supabase-primary release env.
-
-    The explicit production backup approval remains reserved for the future
-    backup action. Google Sheets credentials are intentionally absent because
-    Sheets is now an optional secondary sync destination, not durable storage.
-    """
+    """Run structural preflight with the Supabase-primary release env."""
     node_bin = locate_node_bin()
     node = node_bin / "node"
     env = clean_environment(release_env)
@@ -227,34 +246,60 @@ def local_migrations() -> set[str]:
     return found
 
 
-def linked_migrations(output: str) -> tuple[set[str], set[str]]:
-    local: set[str] = set()
-    remote: set[str] = set()
-    for line in output.splitlines():
-        if "|" not in line:
-            continue
-        columns = line.split("|")
-        if len(columns) < 2:
-            continue
-        left = MIGRATION_RE.search(columns[0])
-        right = MIGRATION_RE.search(columns[1])
-        if left:
-            local.add(left.group(1))
-        if right:
-            remote.add(right.group(1))
-    return local, remote
+def remote_migrations(release_env: dict[str, str]) -> set[str]:
+    """Read applied migration versions via Supabase Management API only."""
+    project_ref = release_env.get("SUPABASE_PROJECT_REF", "")
+    access_token = release_env.get("SUPABASE_ACCESS_TOKEN", "")
+    if not PROJECT_REF_RE.fullmatch(project_ref) or not access_token:
+        raise PrepareBlocked("SUPABASE_MANAGEMENT_API_ENVIRONMENT_INVALID")
+
+    url = f"{SUPABASE_MANAGEMENT_API}/projects/{project_ref}/database/migrations"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "User-Agent": "AI-PROF-release-readiness/1",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(1_000_000)
+    except Exception as exc:
+        raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_UNAVAILABLE") from exc
+
+    try:
+        payload = json.loads(raw.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID") from exc
+
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("migrations"), list):
+        rows = payload["migrations"]
+    else:
+        raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID")
+
+    versions: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID")
+        version = item.get("version")
+        if not isinstance(version, str) or not MIGRATION_RE.fullmatch(version):
+            raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID")
+        versions.add(version)
+    return versions
 
 
-def validate_migration_ledger(report: PrepareReport, node: Path, env: dict[str, str]) -> None:
+def validate_migration_ledger(
+    report: PrepareReport,
+    release_env: dict[str, str],
+) -> None:
     expected = set(EXPECTED_MIGRATIONS)
     if local_migrations() != expected:
         raise PrepareBlocked("LOCAL_MIGRATION_SET_DIVERGED")
-    supabase = PROJECT / "node_modules/.bin/supabase"
-    if not supabase.is_file():
-        raise PrepareBlocked("LOCAL_SUPABASE_CLI_UNAVAILABLE")
-    result = run([str(node), str(supabase), "migration", "list", "--linked"], cwd=PROJECT, env=env)
-    linked_local, linked_remote = linked_migrations(result.stdout)
-    if linked_local != expected or linked_remote != expected:
+    if remote_migrations(release_env) != expected:
         raise PrepareBlocked("LINKED_MIGRATION_LEDGER_DIVERGED")
     report.migration_ledger = "PASS_18_OF_18"
     report.migration_action = "SKIPPED_ALREADY_RECONCILED"
@@ -262,7 +307,11 @@ def validate_migration_ledger(report: PrepareReport, node: Path, env: dict[str, 
 
 def newest_backup() -> Path:
     try:
-        candidates = [path for path in BACKUP_ROOT.iterdir() if path.is_dir() and not path.is_symlink()]
+        candidates = [
+            path
+            for path in BACKUP_ROOT.iterdir()
+            if path.is_dir() and not path.is_symlink()
+        ]
     except OSError as exc:
         raise PrepareBlocked("BACKUP_ROOT_UNAVAILABLE") from exc
     if not candidates:
@@ -286,7 +335,10 @@ def validate_backup_evidence(report: PrepareReport) -> None:
 
 
 def inspect_public_site(report: PrepareReport) -> None:
-    request = urllib.request.Request(PUBLIC_URL, headers={"User-Agent": "AI-PROF-release-readiness/1"})
+    request = urllib.request.Request(
+        PUBLIC_URL,
+        headers={"User-Agent": "AI-PROF-release-readiness/1"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read(500_000).decode("utf-8", "replace")
@@ -306,24 +358,25 @@ def prepare() -> PrepareReport:
         validate_repository(report)
         release_env = read_secret_environment()
         report.environment_names = "PASS"
-        node, env = validate_preflight(report, release_env)
-        validate_migration_ledger(report, node, env)
+        validate_preflight(report, release_env)
+        validate_migration_ledger(report, release_env)
         validate_backup_evidence(report)
         inspect_public_site(report)
     except PrepareBlocked as exc:
         report.blockers.append(str(exc))
         return report
-    report.blockers.extend([
-        "RESTORE_SMOKE_REQUIRED_BEFORE_PRODUCTION_CHANGE",
-        "DEPLOYMENT_TARGET_UNVERIFIED",
-        "ROLLBACK_SAFE_CUTOVER_UNVERIFIED",
-    ])
+    report.blockers.extend(
+        [
+            "RESTORE_SMOKE_REQUIRED_BEFORE_PRODUCTION_CHANGE",
+            "DEPLOYMENT_TARGET_UNVERIFIED",
+            "ROLLBACK_SAFE_CUTOVER_UNVERIFIED",
+        ]
+    )
     return report
 
 
 def render(report: PrepareReport) -> str:
-    payload = asdict(report)
-    return json.dumps(payload, sort_keys=True, indent=2)
+    return json.dumps(asdict(report), sort_keys=True, indent=2)
 
 
 def main() -> int:
