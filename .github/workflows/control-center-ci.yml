@@ -1,0 +1,95 @@
+name: Control Center CI
+
+on:
+  push:
+    branches:
+      - fix/control-center-local-migration-campaign-guard
+      - feature/self-maintenance-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install sandbox dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+
+      - name: Prepare Ubuntu host-contract fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          make_repo() {
+            local path="$1"
+            local base="$2"
+            sudo mkdir -p "$path"
+            sudo chown -R "$USER:$USER" "$path"
+            if [ ! -d "$path/.git" ]; then
+              git -C "$path" init -q
+              git -C "$path" config user.email ci@example.invalid
+              git -C "$path" config user.name "AI PROF CI"
+              printf 'fixture\n' > "$path/README.md"
+              git -C "$path" add README.md
+              git -C "$path" commit -q -m fixture
+            fi
+            git -C "$path" branch -M "$base"
+          }
+
+          make_repo /home/agent/projects/ai-prof-pilot-runtime develop
+          make_repo /home/agent/projects/ak-bermet-agent-pilot develop
+          make_repo /home/agent/projects/ak-bermet main
+
+          cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
+          {
+            "scripts": {
+              "lint": "true",
+              "test:inspection": "true",
+              "test:housekeeping": "true",
+              "test:technician": "true",
+              "build": "true"
+            }
+          }
+          JSON
+          git -C /home/agent/projects/ak-bermet add package.json
+          git -C /home/agent/projects/ak-bermet commit -q -m 'add package fixture'
+          git -C /home/agent/projects/ak-bermet branch develop || true
+          git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
+
+      - name: Python syntax check
+        run: |
+          python -m compileall -q orchestrator tests scripts
+
+      - name: Full test suite in repository-native isolation
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in tests/test_*.py; do
+            echo "===== $test_file ====="
+            python "$test_file"
+          done
+
+      - name: Ensure no tracked bytecode
+        run: |
+          if git ls-files | grep -E '(__pycache__/|\.pyc$)'; then
+            echo 'Tracked Python bytecode is forbidden.' >&2
+            exit 1
+          fi

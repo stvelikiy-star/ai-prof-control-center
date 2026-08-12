@@ -3,9 +3,28 @@
   "control_center": "/home/agent/projects/ai-prof-control-center",
   "default_project": "/home/agent/projects/ak-bermet",
   "default_base_branch": "develop",
-  "max_fix_cycles": 2,
+  "max_fix_cycles": 7,
   "require_clean_worktree": true,
   "require_codex_pass": true,
   "allow_merge": false,
-  "allow_production_deploy": false
+  "allow_production_deploy": false,
+  "auto_repair_enabled": true,
+  "auto_repair_policy": {
+    "required_check_failures": "requeue_with_exact_diagnostics",
+    "review_limit_after_successful_repair": "resume_read_only_audit",
+    "security_and_infrastructure_blockers": "remain_blocked"
+  },
+  "stage01c_media_evidence_policy": {
+    "version": 2,
+    "full_binary_decode_required": "only_with_trusted_decoder_in_approved_scope_or_explicit_task_requirement",
+    "sufficient_application_controls": [
+      "authenticated_staff_and_task_binding",
+      "server_enforced_task_staff_storage_path",
+      "existing_nonzero_bounded_object",
+      "allowlisted_image_mime",
+      "matching_image_signature",
+      "non_executable_storage_and_serving",
+      "inspection_and_audit_history"
+    ]
+  }
 }

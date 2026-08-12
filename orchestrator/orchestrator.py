@@ -13,6 +13,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_paths import DEFAULT_STATE_ROOT, initialize
+from project_registry import validate_task_base_branch
 
 
 REQUIRED_FIELDS = [
@@ -30,6 +33,8 @@ REQUIRED_FIELDS = [
     "Required-Environment",
     "Owner-Approval-Required",
 ]
+
+EXECUTION_MODES = {"code", "operations"}
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)(token|password|secret|api[_-]?key)\s*=\s*\S+"),
@@ -59,17 +64,18 @@ class Paths:
     lock: Path
 
 
-def build_paths(root: Path) -> Paths:
+def build_paths(root: Path, state_root: Path | str | None = None) -> Paths:
+    runtime = initialize(root if state_root is None else state_root)
     paths = Paths(
         root=root,
-        pending=root / "queue/pending",
-        active=root / "queue/active",
-        review=root / "queue/review",
-        failed=root / "queue/failed",
-        completed=root / "queue/completed",
-        blocked=root / "queue/blocked",
-        logs=root / "logs/orchestrator",
-        lock=root / "orchestrator/orchestrator.lock",
+        pending=runtime / "queue/pending",
+        active=runtime / "queue/active",
+        review=runtime / "queue/review",
+        failed=runtime / "queue/failed",
+        completed=runtime / "queue/completed",
+        blocked=runtime / "queue/blocked",
+        logs=runtime / "logs/orchestrator",
+        lock=runtime / "run/orchestrator.lock",
     )
     for directory in [
         paths.pending, paths.active, paths.review, paths.failed,
@@ -91,6 +97,16 @@ def parse_task(path: Path) -> tuple[dict[str, str], str]:
         raise ValueError("Missing required fields: " + ", ".join(missing))
     if values["Owner-Approval-Required"].lower() not in {"yes", "no"}:
         raise ValueError("Owner-Approval-Required must be yes or no")
+    mode_match = re.search(r"(?mi)^\s*Execution-Mode:\s*(.+?)\s*$", text)
+    profile_match = re.search(r"(?mi)^\s*Operation-Profile:\s*(.+?)\s*$", text)
+    values["Execution-Mode"] = mode_match.group(1).strip() if mode_match else "code"
+    values["Operation-Profile"] = profile_match.group(1).strip() if profile_match else "none"
+    if values["Execution-Mode"] not in EXECUTION_MODES:
+        raise ValueError("Execution-Mode must be code or operations")
+    if values["Execution-Mode"] == "operations" and values["Operation-Profile"] == "none":
+        raise ValueError("Operation-Profile is required for operations mode")
+    if values["Execution-Mode"] == "code" and values["Operation-Profile"] != "none":
+        raise ValueError("Operation-Profile is only valid for operations mode")
     return values, text
 
 
@@ -213,7 +229,16 @@ def run_self_test(root: Path) -> int:
 
 
 def process_one(paths: Paths) -> int:
-    tasks = sorted(paths.pending.glob("*.md"))
+    tasks = []
+    for candidate in sorted(paths.pending.glob("*.md")):
+        try:
+            candidate_data, _ = parse_task(candidate)
+        except Exception:
+            tasks.append(candidate)
+            break
+        if candidate_data["Execution-Mode"] == "code":
+            tasks.append(candidate)
+            break
     if not tasks:
         print("QUEUE_EMPTY")
         return 0
@@ -238,8 +263,10 @@ def process_one(paths: Paths) -> int:
             raise RuntimeError(f"BLOCKED_DIRTY_PROJECT: {project}")
         if not is_valid_work_branch(data["Work-Branch"]):
             raise RuntimeError("BLOCKED_INVALID_WORK_BRANCH")
-        if data["Base-Branch"] not in {"main", "develop"}:
-            raise RuntimeError("BLOCKED_INVALID_BASE_BRANCH")
+        try:
+            validate_task_base_branch(paths.root, data["Project-Path"], data["Base-Branch"])
+        except ValueError as exc:
+            raise RuntimeError(f"BLOCKED_INVALID_BASE_BRANCH: {exc}") from exc
 
         validate_access(data)
         context = load_context(paths.root, data["Agent-Context"])
@@ -281,11 +308,12 @@ def process_one(paths: Paths) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="/home/agent/projects/ai-prof-control-center")
+    parser.add_argument("--state-root", default=os.environ.get("AI_PROF_STATE_DIR", str(DEFAULT_STATE_ROOT)))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    paths = build_paths(root)
+    paths = build_paths(root, args.state_root)
 
     try:
         lock_handle = acquire_lock(paths.lock)

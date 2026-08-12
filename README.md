@@ -20,7 +20,38 @@
 7. Передать результат на утверждение.
 8. Только после проверки выполнить merge.
 
-## Пилотный проект
+## Production intake milestone
 
-AK BERMET:
-`/home/agent/projects/ak-bermet`
+Единственный зарегистрированный intake-проект:
+`ai-prof-pilot` (`/home/agent/projects/ai-prof-pilot-sandbox`, ветка `develop`).
+
+Создание задачи одной локальной командой:
+
+```bash
+./scripts/submit-task create \
+  --project ai-prof-pilot \
+  --title "Update pilot documentation" \
+  --instructions "Clarify the local verification workflow" \
+  --work-branch feature/clarify-verification \
+  --scope README.md
+```
+
+Проверить очередь и supervisor:
+
+```bash
+./scripts/submit-task list
+./scripts/control-center --status
+./scripts/control-center --once
+```
+
+Claude работает только в Bubblewrap и применяет изменения только из
+`Scope-Files`. Codex запускается независимо в `read-only` sandbox.
+Commit, push, merge и deployment отключены.
+
+## Runtime state
+
+Очереди задач, PID/locks, heartbeat и журналы являются runtime-данными и
+хранятся вне Git worktree в
+`/home/agent/.local/state/ai-prof-control-center`. Путь можно переопределить
+переменной `AI_PROF_STATE_DIR` или аргументом `--state-root`. `--root`
+по-прежнему указывает на исходный код и реестр проектов.

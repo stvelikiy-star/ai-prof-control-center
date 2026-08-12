@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "project_id": "ai-prof-pilot",
+      "path": "/home/agent/projects/ai-prof-pilot-runtime",
+      "base_branch": "develop",
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "tests/**"
+      ],
+      "agent_context": "agents/ai-prof-pilot",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false
+    },
+    {
+      "project_id": "ak-bermet",
+      "path": "/home/agent/projects/ak-bermet",
+      "enabled": true,
+      "base_branch": "main",
+      "allowed_base_branches": [
+        "main",
+        "develop",
+        "integration/ak-bermet-3day"
+      ],
+      "local_integration_branches": [
+        "integration/ak-bermet-3day"
+      ],
+      "allow_local_campaign_merge": true,
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "src/**",
+        "public/**",
+        "tests/**",
+        "supabase/migrations/**",
+        "AI_CHAT_ARCHITECTURE.md",
+        "CRM_AND_LEADS_ARCHITECTURE.md",
+        "GOOGLE_SHEETS_SETUP.md",
+        "MANAGER_AUTH_AND_PERSISTENCE.md",
+        "MANAGER_WORKSPACE.md",
+        "REAL_AI_SETUP.md",
+        "TODO_NEXT_STAGES.md"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "supabase/.temp/**",
+        "node_modules/**",
+        ".next/**",
+        "lock files"
+      ],
+      "agent_context": "agents/ak-bermet",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20,
+      "code_required_commands": [
+        "git",
+        "python3",
+        "node",
+        "npm",
+        "npx"
+      ],
+      "code_required_checks": [
+        "npm run lint",
+        "npx tsc --noEmit --incremental false",
+        "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
+        "node --test --experimental-strip-types src/lib/holds-availability.test.ts",
+        "node --test supabase/migrations/availability-hold-security.contract.test.mjs",
+        "npm run build"
+      ],
+      "code_toolchain": "nvm-node",
+      "release": {
+        "branch": "main",
+        "required_commands": [
+          "git",
+          "python3",
+          "node",
+          "npm",
+          "npx",
+          "supabase",
+          "docker"
+        ],
+        "required_environment": [
+          "SUPABASE_ACCESS_TOKEN",
+          "SUPABASE_PROJECT_REF",
+          "SUPABASE_DB_PASSWORD",
+          "NEXT_PUBLIC_SUPABASE_URL",
+          "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY"
+        ],
+        "secret_file": "/home/agent/.config/ai-prof-control-center/ak-bermet-release.env",
+        "backup_script": "/home/agent/projects/ak-bermet/supabase/migrations/ak-bermet-production-backup.sh",
+        "backup_markers": [
+          "ak-bermet",
+          "supabase",
+          "pg_dump"
+        ],
+        "checks": [
+          [
+            "npm",
+            "run",
+            "lint"
+          ],
+          [
+            "npx",
+            "tsc",
+            "--noEmit",
+            "--incremental",
+            "false"
+          ],
+          [
+            "npm",
+            "run",
+            "test:inspection"
+          ],
+          [
+            "npm",
+            "run",
+            "test:housekeeping"
+          ],
+          [
+            "npm",
+            "run",
+            "test:technician"
+          ],
+          [
+            "npm",
+            "run",
+            "build"
+          ]
+        ]
+      }
+    },
+    {
+      "project_id": "ak-bermet-pilot",
+      "path": "/home/agent/projects/ak-bermet-agent-pilot",
+      "enabled": true,
+      "base_branch": "develop",
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "ai-system/**",
+        "tests/**"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        "secrets",
+        "credentials",
+        "migrations/**",
+        "lock files"
+      ],
+      "agent_context": "agents/ak-bermet",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20
+    }
+  ]
+}
