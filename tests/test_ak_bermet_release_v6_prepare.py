@@ -51,22 +51,77 @@ class AkBermetReleaseV6PrepareTests(unittest.TestCase):
         self.assertIs(runner.call_args.kwargs["shell"], False)
         self.assertEqual(runner.call_args.args[0], ["/usr/bin/git", "status"])
 
-    def test_secret_file_requires_mode_0600_and_only_required_names(self):
+    def test_release_secret_file_requires_private_mode_and_only_release_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             secret = Path(tmp) / "release.env"
             secret.write_text(
-                "\n".join(f"{key}=value-{index}" for index, key in enumerate(release.REQUIRED_ENV))
+                "\n".join(
+                    f"{key}=value-{index}"
+                    for index, key in enumerate(release.REQUIRED_RELEASE_ENV)
+                )
                 + "\nUNRELATED=value\n",
                 encoding="utf-8",
             )
             secret.chmod(0o600)
             with mock.patch.object(release, "SECRET_FILE", secret):
                 values = release.read_secret_environment()
-            self.assertEqual(set(values), set(release.REQUIRED_ENV))
+            self.assertEqual(set(values), set(release.REQUIRED_RELEASE_ENV))
             secret.chmod(0o644)
             with mock.patch.object(release, "SECRET_FILE", secret):
                 with self.assertRaisesRegex(release.PrepareBlocked, "MODE_INVALID"):
                     release.read_secret_environment()
+
+    def test_app_env_is_separate_private_contract_and_sheets_must_be_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_env = Path(tmp) / ".env.local"
+            values = {
+                "GOOGLE_SHEETS_ENABLED": "true",
+                "GOOGLE_SHEETS_SPREADSHEET_ID": "sheet-id",
+                "GOOGLE_SERVICE_ACCOUNT_EMAIL": "service@example.invalid",
+                "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY": "private-key",
+            }
+            app_env.write_text(
+                "\n".join(f"{key}={value}" for key, value in values.items()) + "\n",
+                encoding="utf-8",
+            )
+            app_env.chmod(0o600)
+            with mock.patch.object(release, "APP_ENV_FILE", app_env):
+                actual = release.read_app_environment()
+            self.assertEqual(actual, values)
+
+            app_env.write_text(
+                app_env.read_text(encoding="utf-8").replace(
+                    "GOOGLE_SHEETS_ENABLED=true",
+                    "GOOGLE_SHEETS_ENABLED=false",
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(release, "APP_ENV_FILE", app_env):
+                with self.assertRaisesRegex(release.PrepareBlocked, "GOOGLE_SHEETS_NOT_ENABLED"):
+                    release.read_app_environment()
+
+    def test_read_only_v6_preflight_never_requires_backup_approval_gate(self):
+        report = release.PrepareReport(release.FROZEN_SHA, str(release.PROJECT))
+        completed = subprocess.CompletedProcess(["node"], 0, "RESULT: PASS\n", "")
+        release_env = {key: "release-value" for key in release.REQUIRED_RELEASE_ENV}
+        app_env = {
+            "GOOGLE_SHEETS_ENABLED": "true",
+            "GOOGLE_SHEETS_SPREADSHEET_ID": "sheet-id",
+            "GOOGLE_SERVICE_ACCOUNT_EMAIL": "service@example.invalid",
+            "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY": "private-key",
+        }
+        with (
+            mock.patch.object(release, "locate_node_bin", return_value=Path("/node22/bin")),
+            mock.patch.object(release, "run", return_value=completed) as runner,
+        ):
+            _node, env = release.validate_preflight(report, release_env, app_env)
+        self.assertEqual(runner.call_count, 1)
+        argv = runner.call_args.args[0]
+        self.assertEqual(argv[-1], "scripts/production-preflight.mjs")
+        self.assertNotIn("preflight:production", " ".join(argv))
+        self.assertNotIn("AK_BERMET_BACKUP_APPROVED", env)
+        self.assertEqual(report.structural_preflight, "PASS")
+        self.assertEqual(report.production_preflight, "PASS_V6_ENV_CONTRACT")
 
     def test_linked_ledger_must_be_exact_and_never_pushes(self):
         expected = set(release.EXPECTED_MIGRATIONS)
@@ -116,10 +171,18 @@ class AkBermetReleaseV6PrepareTests(unittest.TestCase):
         self.assertEqual(report.deployment_target, "UNVERIFIED")
 
     def test_successful_read_only_prepare_still_blocks_production_change(self):
-        report = release.PrepareReport(release.FROZEN_SHA, str(release.PROJECT))
         with (
             mock.patch.object(release, "validate_repository"),
-            mock.patch.object(release, "read_secret_environment", return_value={key: "x" for key in release.REQUIRED_ENV}),
+            mock.patch.object(
+                release,
+                "read_secret_environment",
+                return_value={key: "x" for key in release.REQUIRED_RELEASE_ENV},
+            ),
+            mock.patch.object(
+                release,
+                "read_app_environment",
+                return_value={key: "x" for key in release.REQUIRED_APP_ENV},
+            ),
             mock.patch.object(release, "validate_preflight", return_value=(Path("/node"), {})),
             mock.patch.object(release, "validate_migration_ledger"),
             mock.patch.object(release, "validate_backup_evidence"),
