@@ -54,8 +54,6 @@ jobs:
           make_repo /home/agent/projects/ai-prof-pilot-runtime develop
           make_repo /home/agent/projects/ak-bermet-agent-pilot develop
           make_repo /home/agent/projects/ak-bermet main
-          git -C /home/agent/projects/ak-bermet branch develop || true
-          git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
 
           cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
           {
@@ -68,6 +66,10 @@ jobs:
             }
           }
           JSON
+          git -C /home/agent/projects/ak-bermet add package.json
+          git -C /home/agent/projects/ak-bermet commit -q -m 'add package fixture'
+          git -C /home/agent/projects/ak-bermet branch develop || true
+          git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
 
       - name: Python syntax check
         run: |
@@ -76,6 +78,7 @@ jobs:
       - name: Full test suite in repository-native isolation
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}
         shell: bash
         run: |
           set -euo pipefail
