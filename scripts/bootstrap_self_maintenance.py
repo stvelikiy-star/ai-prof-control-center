@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Create/update the isolated AI PROF self-maintenance worktree safely."""
+"""Create/update the isolated AI PROF self-maintenance checkout safely.
+
+The maintenance checkout is a standalone local clone, not a linked Git
+worktree.  This keeps its Git metadata independent from the live Control
+Center checkout and satisfies the strict task-intake repository contract.
+"""
 from __future__ import annotations
 
 import argparse
@@ -26,7 +31,9 @@ def run(argv: list[str], *, cwd: Path | None = None, capture: bool = False) -> s
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "command failed").strip()
-        raise BootstrapError(f"command failed: {argv[0]} {argv[1] if len(argv) > 1 else ''}: {detail}")
+        raise BootstrapError(
+            f"command failed: {argv[0]} {argv[1] if len(argv) > 1 else ''}: {detail}"
+        )
     return (result.stdout or "").strip()
 
 
@@ -51,46 +58,70 @@ def status(path: Path) -> str:
     return run(["git", "status", "--porcelain"], cwd=path, capture=True)
 
 
+def clone_target(source: Path, target: Path, origin_url: str) -> None:
+    run(["git", "clone", origin_url, str(target)], cwd=source.parent)
+    run(["git", "switch", "-c", BASE_BRANCH, REMOTE_REF], cwd=target)
+
+
+def convert_linked_worktree(source: Path, target: Path, origin_url: str) -> None:
+    """Replace the old clean linked worktree with an independent clone."""
+    target = ensure_plain_directory(target, "maintenance checkout")
+    if status(target):
+        raise BootstrapError("maintenance checkout is dirty; refusing to convert it")
+    if current_branch(target) != BASE_BRANCH:
+        raise BootstrapError(f"maintenance checkout must be on {BASE_BRANCH}")
+    run(["git", "worktree", "remove", str(target)], cwd=source)
+    if target.exists():
+        raise BootstrapError("linked maintenance worktree was not removed cleanly")
+    clone_target(source, target, origin_url)
+
+
 def bootstrap(source: Path = SOURCE, target: Path = TARGET) -> str:
     source = ensure_plain_directory(source, "source checkout")
     if not (source / ".git").exists():
-        # A linked worktree has a .git file; source is expected to be the primary checkout.
         raise BootstrapError("source checkout is not a Git repository")
 
     run(["git", "fetch", "origin", "main"], cwd=source)
     remote_sha = head(source, REMOTE_REF)
+    origin_url = run(["git", "remote", "get-url", "origin"], cwd=source, capture=True)
+    if not origin_url:
+        raise BootstrapError("source origin remote is unavailable")
 
     if target.exists():
         target = ensure_plain_directory(target, "maintenance checkout")
-        if not (target / ".git").exists():
-            raise BootstrapError("maintenance checkout exists but is not a Git worktree")
-        if status(target):
-            raise BootstrapError("maintenance checkout is dirty; refusing to modify it")
-        if current_branch(target) != BASE_BRANCH:
-            raise BootstrapError(f"maintenance checkout must be on {BASE_BRANCH}")
-        run(["git", "merge", "--ff-only", REMOTE_REF], cwd=target)
-    else:
-        # Recreate only a stale local branch that is not currently checked out.
-        existing = subprocess.run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{BASE_BRANCH}"],
-            cwd=source,
-            check=False,
-        ).returncode == 0
-        if existing:
-            branch_sha = head(source, BASE_BRANCH)
-            if branch_sha != remote_sha:
-                run(["git", "branch", "-f", BASE_BRANCH, REMOTE_REF], cwd=source)
+        git_marker = target / ".git"
+        if git_marker.is_file():
+            convert_linked_worktree(source, target, origin_url)
+            target = ensure_plain_directory(target, "maintenance checkout")
+        elif git_marker.is_dir():
+            if status(target):
+                raise BootstrapError("maintenance checkout is dirty; refusing to modify it")
+            if current_branch(target) != BASE_BRANCH:
+                raise BootstrapError(f"maintenance checkout must be on {BASE_BRANCH}")
+            target_origin = run(
+                ["git", "remote", "get-url", "origin"], cwd=target, capture=True
+            )
+            if target_origin != origin_url:
+                raise BootstrapError("maintenance checkout origin does not match source origin")
+            run(["git", "fetch", "origin", "main"], cwd=target)
+            run(["git", "merge", "--ff-only", REMOTE_REF], cwd=target)
         else:
-            run(["git", "branch", BASE_BRANCH, REMOTE_REF], cwd=source)
-        run(["git", "worktree", "add", str(target), BASE_BRANCH], cwd=source)
+            raise BootstrapError("maintenance checkout exists but is not a standalone Git clone")
+    else:
+        clone_target(source, target, origin_url)
         target = ensure_plain_directory(target, "maintenance checkout")
 
+    if not (target / ".git").is_dir():
+        raise BootstrapError("maintenance checkout is not an independent Git clone")
     if current_branch(target) != BASE_BRANCH:
         raise BootstrapError("maintenance branch verification failed")
     if status(target):
         raise BootstrapError("maintenance checkout is not clean after bootstrap")
-    if head(target) != remote_sha:
+    run(["git", "fetch", "origin", "main"], cwd=target)
+    if head(target) != head(target, REMOTE_REF):
         raise BootstrapError("maintenance checkout does not match origin/main")
+    if head(target) != remote_sha:
+        raise BootstrapError("maintenance checkout does not match source origin/main")
     return remote_sha
 
 
