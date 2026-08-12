@@ -1,6 +1,10 @@
 name: Control Center CI
 
 on:
+  push:
+    branches:
+      - fix/control-center-local-migration-campaign-guard
+      - feature/self-maintenance-v1
   pull_request:
     branches:
       - main
