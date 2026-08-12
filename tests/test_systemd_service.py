@@ -19,9 +19,16 @@ class ControlCenterServiceTests(unittest.TestCase):
 
     def test_only_approved_runtime_and_projects_are_service_writable(self):
         text = UNIT.read_text(encoding="utf-8")
-        line = next(line for line in text.splitlines() if line.startswith("ReadWritePaths="))
+        line = next(
+            line for line in text.splitlines()
+            if line.startswith("ReadWritePaths=")
+        )
         self.assertIn("/home/agent/.local/state/ai-prof-control-center", line)
         self.assertIn("/home/agent/projects/ak-bermet", line)
+        self.assertIn(
+            "/home/agent/projects/ai-prof-control-center-maintenance", line
+        )
+        self.assertNotIn("/home/agent/projects/ai-prof-control-center ", line)
         self.assertNotIn("/home/agent/.nvm", line)
         self.assertNotIn("/home/agent/.claude", line)
         self.assertNotIn("/home/agent/.codex", line)
