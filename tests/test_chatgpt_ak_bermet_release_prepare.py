@@ -82,17 +82,19 @@ class ChatGptAkBermetReleasePrepareTests(unittest.TestCase):
         submit.assert_not_called()
         self.assertEqual(state["42"]["status"], "rejected")
 
-    def test_valid_release_prepare_is_imported_once_and_reports_read_only_authority(self):
+    def test_valid_release_prepare_is_imported_once_then_only_status_polled(self):
         state = {}
         created = {"task_id": "AK_BERMET_20260812T120000Z_ABCDEF", "queue": "pending"}
         with (
             mock.patch.object(service.gateway, "find_existing_task_for_issue", return_value=None),
             mock.patch.object(service, "submit_release_prepare", return_value=created) as submit,
             mock.patch.object(service.gateway, "post_comment") as comment,
+            mock.patch.object(service.gateway, "report_task_state", return_value=False) as report,
         ):
             self.assertTrue(service.process_release_prepare_issue(release_issue(), state))
             self.assertFalse(service.process_release_prepare_issue(release_issue(), state))
         submit.assert_called_once_with(42)
+        report.assert_called_once_with(42, state["42"])
         self.assertEqual(state["42"]["task_id"], created["task_id"])
         self.assertIn("read-only preparation only", comment.call_args.args[1])
 
