@@ -115,13 +115,15 @@ class AkBermetReleaseV6PrepareTests(unittest.TestCase):
             "DATABASE_URL": "postgresql://secret",
             "PATH": "/usr/bin",
         }
-        with (
-            mock.patch.object(release.RESTORE_HELPER, "is_file", return_value=True),
-            mock.patch.object(release.RESTORE_HELPER, "is_symlink", return_value=False),
-            mock.patch.object(release.os, "environ", secret_env),
-            mock.patch.object(release, "run", return_value=completed) as runner,
-        ):
-            release.validate_restore_smoke(report, Path("/node/bin"))
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = Path(tmp) / "restore.py"
+            helper.write_text("# helper\n", encoding="utf-8")
+            with (
+                mock.patch.object(release, "RESTORE_HELPER", helper),
+                mock.patch.object(release.os, "environ", secret_env),
+                mock.patch.object(release, "run", return_value=completed) as runner,
+            ):
+                release.validate_restore_smoke(report, Path("/node/bin"))
         env = runner.call_args.kwargs["env"]
         for key in release.PRODUCTION_SECRET_NAMES:
             self.assertNotIn(key, env)
