@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ak_bermet_release_v6_prepare as release_v6
 from operation_profiles import OperationProfile, resolve_profile
 from runtime_paths import DEFAULT_STATE_ROOT
 
@@ -149,9 +150,10 @@ def validate_repository(
         raise OperationBlocked(f"repository must be on {profile.base_branch}")
     if git_output(repository, environment, "status", "--porcelain"):
         raise OperationBlocked("repository working tree is dirty")
-    expected = repository / profile.expected_migration
-    if not expected.is_file() or expected.is_symlink():
-        raise OperationBlocked("registered migration is missing or unsafe")
+    if profile.kind == "migration":
+        expected = repository / profile.expected_migration
+        if not expected.is_file() or expected.is_symlink():
+            raise OperationBlocked("registered migration is missing or unsafe")
     return repository
 
 
@@ -232,7 +234,29 @@ def restore_tsbuildinfo(repository: Path, before: bytes | None) -> None:
         path.write_bytes(before)
 
 
+def execute_release_v6_prepare(profile: OperationProfile, requested_path: str) -> str:
+    if requested_path != str(profile.repository):
+        raise OperationBlocked("operation repository does not exactly match registered path")
+    if profile.kind != "release-v6-prepare":
+        raise OperationBlocked("invalid release prepare operation kind")
+    report = release_v6.prepare()
+    if report.repository != str(profile.repository):
+        raise OperationFailed("release prepare report repository mismatch")
+    if report.production_changed:
+        raise OperationFailed("read-only release prepare reported a production mutation")
+    blockers = list(report.blockers or [])
+    if blockers:
+        safe = ",".join(redact(item).replace("\n", " ")[:180] for item in blockers)
+        raise OperationBlocked(f"AK_BERMET_V6_PREPARE:{safe}")
+    return "release_ready"
+
+
 def execute_profile(profile: OperationProfile, requested_path: str) -> str:
+    if profile.kind == "release-v6-prepare":
+        return execute_release_v6_prepare(profile, requested_path)
+    if profile.kind != "migration":
+        raise OperationBlocked("unsupported operation profile kind")
+
     node_bin = locate_node_bin()
     environment = operation_environment(node_bin)
     repository = validate_repository(profile, requested_path, environment)
@@ -317,7 +341,7 @@ def process_one(paths: orch.Paths) -> int:
             "PASS\n"
             f"task_id={data['Task-ID']}\n"
             f"profile={profile.key}\n"
-            f"migration={outcome}\n"
+            f"outcome={outcome}\n"
             "task_text_executed=false\nshell=false\nworking_tree=clean\n"
         )
         log_path.write_text(redact(summary), encoding="utf-8")

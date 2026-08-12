@@ -1,4 +1,4 @@
-"""Immutable allowlist for privileged, non-interactive production operations."""
+"""Immutable allowlist for privileged and release-control operations."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +11,7 @@ class OperationProfile:
     repository: Path
     base_branch: str
     expected_migration: str
+    kind: str = "migration"
 
 
 AK_BERMET_SUPABASE_RPC_DEPLOY = OperationProfile(
@@ -23,8 +24,17 @@ AK_BERMET_SUPABASE_RPC_DEPLOY = OperationProfile(
     ),
 )
 
+AK_BERMET_PRODUCTION_PREPARE_V6 = OperationProfile(
+    key="ak-bermet-production-prepare-v6",
+    repository=Path("/home/agent/projects/ak-bermet"),
+    base_branch="main",
+    expected_migration="",
+    kind="release-v6-prepare",
+)
+
 PROFILES = {
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
+    AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
 }
 
 
