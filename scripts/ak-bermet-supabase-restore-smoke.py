@@ -37,7 +37,13 @@ def fail(code: str, detail: str | None = None) -> int:
     return 2
 
 
-def run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int = 300) -> subprocess.CompletedProcess[str]:
+def run(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int = 300,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
         cwd=str(cwd),
@@ -93,9 +99,45 @@ def write_config(workdir: Path, project_id: str, db_port: int, shadow_port: int)
     )
 
 
+def db_container_name(project_id: str) -> str:
+    return f"supabase_db_{project_id}"
+
+
+def docker_psql(
+    docker: str,
+    container: str,
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int = 600,
+) -> subprocess.CompletedProcess[str]:
+    return run(
+        [
+            docker,
+            "exec",
+            "-e",
+            "PGPASSWORD=postgres",
+            container,
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            *args,
+        ],
+        cwd=cwd,
+        env=env,
+        timeout=timeout,
+    )
+
+
 def main() -> int:
     if not CLI.is_file():
         return fail("SUPABASE_CLI_UNAVAILABLE")
+    docker = shutil.which("docker")
+    if not docker:
+        return fail("DOCKER_CLI_UNAVAILABLE")
     try:
         backup = newest_backup()
     except Exception as exc:
@@ -120,6 +162,7 @@ def main() -> int:
         write_config(workdir, project_id, db_port, shadow_port)
 
         started = False
+        container = db_container_name(project_id)
         try:
             start = run(
                 [str(CLI), "--workdir", str(workdir), "db", "start"],
@@ -131,42 +174,82 @@ def main() -> int:
                 return fail("LOCAL_SUPABASE_DB_START_FAILED", start.stderr or start.stdout)
             started = True
 
-            db_url = f"postgresql://postgres:postgres@127.0.0.1:{db_port}/postgres"
-            psql = shutil.which("psql")
-            if not psql:
-                return fail("PSQL_UNAVAILABLE")
+            inspect = run(
+                [docker, "inspect", "--format", "{{.State.Running}}", container],
+                cwd=PROJECT,
+                env=env,
+                timeout=30,
+            )
+            if inspect.returncode != 0 or inspect.stdout.strip().lower() != "true":
+                return fail("LOCAL_SUPABASE_DB_CONTAINER_UNAVAILABLE", inspect.stderr or inspect.stdout)
 
-            restore = run(
+            target_root = "/tmp/ak-bermet-restore-smoke"
+            mkdir = run(
+                [docker, "exec", container, "mkdir", "-p", target_root],
+                cwd=PROJECT,
+                env=env,
+                timeout=30,
+            )
+            if mkdir.returncode != 0:
+                return fail("RESTORE_STAGING_DIR_FAILED", mkdir.stderr or mkdir.stdout)
+
+            for name in FILES:
+                copied = run(
+                    [docker, "cp", str(backup / name), f"{container}:{target_root}/{name}"],
+                    cwd=PROJECT,
+                    env=env,
+                    timeout=60,
+                )
+                if copied.returncode != 0:
+                    return fail(f"RESTORE_COPY_FAILED:{name}", copied.stderr or copied.stdout)
+
+            roles = docker_psql(
+                docker,
+                container,
+                ["-v", "ON_ERROR_STOP=1", "-f", f"{target_root}/roles.sql"],
+                cwd=PROJECT,
+                env=env,
+            )
+            if roles.returncode != 0:
+                return fail("LOGICAL_RESTORE_ROLES_FAILED", roles.stderr or roles.stdout)
+
+            schema = docker_psql(
+                docker,
+                container,
+                ["--single-transaction", "-v", "ON_ERROR_STOP=1", "-f", f"{target_root}/schema.sql"],
+                cwd=PROJECT,
+                env=env,
+            )
+            if schema.returncode != 0:
+                return fail("LOGICAL_RESTORE_SCHEMA_FAILED", schema.stderr or schema.stdout)
+
+            data = docker_psql(
+                docker,
+                container,
                 [
-                    psql,
                     "--single-transaction",
-                    "--variable",
+                    "-v",
                     "ON_ERROR_STOP=1",
-                    "--file",
-                    str(backup / "roles.sql"),
-                    "--file",
-                    str(backup / "schema.sql"),
-                    "--command",
+                    "-c",
                     "SET session_replication_role = replica",
-                    "--file",
-                    str(backup / "data.sql"),
-                    "--dbname",
-                    db_url,
+                    "-f",
+                    f"{target_root}/data.sql",
                 ],
                 cwd=PROJECT,
                 env=env,
-                timeout=600,
             )
-            if restore.returncode != 0:
-                return fail("LOGICAL_RESTORE_FAILED", restore.stderr or restore.stdout)
+            if data.returncode != 0:
+                return fail("LOGICAL_RESTORE_DATA_FAILED", data.stderr or data.stdout)
 
             table_query = (
                 "select tablename from pg_tables where schemaname='public' and tablename in ("
                 + ",".join("'%s'" % name for name in CORE_TABLES)
                 + ") order by tablename;"
             )
-            check = run(
-                [psql, "-Atq", "--dbname", db_url, "--command", table_query],
+            check = docker_psql(
+                docker,
+                container,
+                ["-Atq", "-c", table_query],
                 cwd=PROJECT,
                 env=env,
                 timeout=60,
