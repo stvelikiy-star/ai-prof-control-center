@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only AK BERMET Production Activation V6 readiness probe.
+"""AK BERMET Production Activation V6 readiness probe.
 
-This module intentionally cannot migrate or deploy production. It verifies the
-frozen release SHA, repository cleanliness, Supabase/release environment names,
-structural preflight, exact local + remote migration ledger, backup evidence,
-and public-site fingerprint. Remote migration history is read through the
-official Supabase Management API, avoiding a direct Postgres password/IPv6
-connection dependency. Google Sheets is an optional secondary sync target and
-is not a production release gate. Unresolved production authority remains an
-explicit blocker.
+The probe may create and destroy local temporary Docker resources for an
+isolated restore smoke. It never migrates, deploys, resets, or mutates linked
+production resources. Supabase migration history is read through the official
+Management API; Google Sheets remains optional secondary sync.
 """
 from __future__ import annotations
 
@@ -23,9 +19,11 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
 PROJECT = Path("/home/agent/projects/ak-bermet")
 SECRET_FILE = Path("/home/agent/.config/ai-prof-control-center/ak-bermet-release.env")
 BACKUP_ROOT = Path("/home/agent/ai-prof-backups/ak-bermet")
+RESTORE_HELPER = ROOT / "scripts/ak-bermet-supabase-restore-smoke.py"
 FROZEN_SHA = "bd7912d4d5cd41603522c205e58b587d0063e6fe"
 PUBLIC_URL = "https://akbermet.kg/"
 SUPABASE_MANAGEMENT_API = "https://api.supabase.com/v1"
@@ -39,7 +37,7 @@ REQUIRED_RELEASE_ENV = (
     "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
 )
-REQUIRED_ENV = REQUIRED_RELEASE_ENV  # backward-compatible test/API alias
+REQUIRED_ENV = REQUIRED_RELEASE_ENV
 
 EXPECTED_MIGRATIONS = (
     "20260721000100",
@@ -64,6 +62,15 @@ EXPECTED_MIGRATIONS = (
 MIGRATION_RE = re.compile(r"(?<!\d)(\d{14})(?!\d)")
 PROJECT_REF_RE = re.compile(r"^[a-z0-9]{20}$")
 UNSAFE_ENV = {"NODE_OPTIONS", "NODE_PATH", "NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"}
+PRODUCTION_SECRET_NAMES = {
+    "SUPABASE_ACCESS_TOKEN",
+    "SUPABASE_DB_PASSWORD",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "DATABASE_URL",
+    "PGPASSWORD",
+}
 LEGACY_MARKERS = ("Hotel Prime", "Make Booking", "Proceed to checkout", "Сделать заказ")
 
 
@@ -225,7 +232,6 @@ def validate_preflight(
     report: PrepareReport,
     release_env: dict[str, str],
 ) -> tuple[Path, dict[str, str]]:
-    """Run structural preflight with the Supabase-primary release env."""
     node_bin = locate_node_bin()
     node = node_bin / "node"
     env = clean_environment(release_env)
@@ -233,7 +239,7 @@ def validate_preflight(
     run([str(node), "scripts/production-preflight.mjs"], cwd=PROJECT, env=env)
     report.structural_preflight = "PASS"
     report.production_preflight = "PASS_SUPABASE_PRIMARY_CONTRACT"
-    return node, env
+    return node_bin, env
 
 
 def local_migrations() -> set[str]:
@@ -247,12 +253,10 @@ def local_migrations() -> set[str]:
 
 
 def remote_migrations(release_env: dict[str, str]) -> set[str]:
-    """Read applied migration versions via Supabase Management API only."""
     project_ref = release_env.get("SUPABASE_PROJECT_REF", "")
     access_token = release_env.get("SUPABASE_ACCESS_TOKEN", "")
     if not PROJECT_REF_RE.fullmatch(project_ref) or not access_token:
         raise PrepareBlocked("SUPABASE_MANAGEMENT_API_ENVIRONMENT_INVALID")
-
     url = f"{SUPABASE_MANAGEMENT_API}/projects/{project_ref}/database/migrations"
     request = urllib.request.Request(
         url,
@@ -268,19 +272,16 @@ def remote_migrations(release_env: dict[str, str]) -> set[str]:
             raw = response.read(1_000_000)
     except Exception as exc:
         raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_UNAVAILABLE") from exc
-
     try:
         payload = json.loads(raw.decode("utf-8", "strict"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID") from exc
-
     if isinstance(payload, list):
         rows = payload
     elif isinstance(payload, dict) and isinstance(payload.get("migrations"), list):
         rows = payload["migrations"]
     else:
         raise PrepareBlocked("SUPABASE_MIGRATION_HISTORY_INVALID")
-
     versions: set[str] = set()
     for item in rows:
         if not isinstance(item, dict):
@@ -292,10 +293,7 @@ def remote_migrations(release_env: dict[str, str]) -> set[str]:
     return versions
 
 
-def validate_migration_ledger(
-    report: PrepareReport,
-    release_env: dict[str, str],
-) -> None:
+def validate_migration_ledger(report: PrepareReport, release_env: dict[str, str]) -> None:
     expected = set(EXPECTED_MIGRATIONS)
     if local_migrations() != expected:
         raise PrepareBlocked("LOCAL_MIGRATION_SET_DIVERGED")
@@ -326,12 +324,35 @@ def validate_backup_evidence(report: PrepareReport) -> None:
         path = root / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
             raise PrepareBlocked(f"BACKUP_ARTIFACT_INVALID:{name}")
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        digests.append(digest)
+        digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
     if len(set(digests)) != 3:
         raise PrepareBlocked("BACKUP_ARTIFACT_HASH_COLLISION")
     report.backup_evidence = f"PASS:{root.name}"
-    report.restore_smoke = "REQUIRED_BEFORE_PRODUCTION_CHANGE"
+
+
+def validate_restore_smoke(report: PrepareReport, node_bin: Path) -> None:
+    if RESTORE_HELPER.is_symlink() or not RESTORE_HELPER.is_file():
+        raise PrepareBlocked("RESTORE_SMOKE_HELPER_UNAVAILABLE")
+    env = clean_environment()
+    for key in PRODUCTION_SECRET_NAMES:
+        env.pop(key, None)
+    env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    result = run(
+        [sys.executable, str(RESTORE_HELPER)],
+        cwd=ROOT,
+        env=env,
+        timeout=1200,
+    )
+    try:
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise PrepareBlocked("RESTORE_SMOKE_OUTPUT_INVALID") from exc
+    if payload.get("status") != "PASS" or payload.get("production_changed") is not False:
+        raise PrepareBlocked("RESTORE_SMOKE_FAILED")
+    backup_name = payload.get("backup")
+    if not isinstance(backup_name, str) or not backup_name:
+        raise PrepareBlocked("RESTORE_SMOKE_OUTPUT_INVALID")
+    report.restore_smoke = f"PASS:{backup_name}"
 
 
 def inspect_public_site(report: PrepareReport) -> None:
@@ -358,16 +379,16 @@ def prepare() -> PrepareReport:
         validate_repository(report)
         release_env = read_secret_environment()
         report.environment_names = "PASS"
-        validate_preflight(report, release_env)
+        node_bin, _env = validate_preflight(report, release_env)
         validate_migration_ledger(report, release_env)
         validate_backup_evidence(report)
+        validate_restore_smoke(report, node_bin)
         inspect_public_site(report)
     except PrepareBlocked as exc:
         report.blockers.append(str(exc))
         return report
     report.blockers.extend(
         [
-            "RESTORE_SMOKE_REQUIRED_BEFORE_PRODUCTION_CHANGE",
             "DEPLOYMENT_TARGET_UNVERIFIED",
             "ROLLBACK_SAFE_CUTOVER_UNVERIFIED",
         ]
