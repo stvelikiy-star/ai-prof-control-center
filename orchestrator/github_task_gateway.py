@@ -4,7 +4,7 @@
 V1 is deliberately narrow:
 - polls exactly one private repository;
 - accepts only issues created by the fixed owner login;
-- accepts a strict code-only JSON contract;
+- accepts a strict V1 code-only JSON contract;
 - delegates final project/branch/scope validation to submit_task.py;
 - never executes issue prose as shell input;
 - never grants secrets, deployment, migration, merge, push, commit or
@@ -92,6 +92,11 @@ def _text(name: str, value: Any, *, limit: int = MAX_TEXT) -> str:
     value = value.strip()
     if not value or len(value) > limit or "\x00" in value:
         raise GatewayError(f"{name} is empty or too long")
+    # Never copy a token/password/credential/DB URI pattern from GitHub into a
+    # local AI PROF task file. The existing Telegram redactor is the shared
+    # source of truth for secret-like text detection.
+    if bridge.redact(value) != value:
+        raise GatewayError(f"{name} contains secret-like material")
     return value
 
 
