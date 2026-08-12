@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import github_task_gateway as gateway
 
@@ -22,6 +23,8 @@ RELEASE_PROJECT = "ak-bermet"
 RELEASE_PROFILE = "ak-bermet-production-prepare-v6"
 RELEASE_SCOPE = "README.md"
 RELEASE_TASK_TITLE = "AK BERMET Production Prepare V6"
+RELEASE_RECORD_KIND = "ak-bermet-release-prepare-v6"
+RELEASE_LOG_LIMIT = 64 * 1024
 RELEASE_CONTRACT = {
     "version": 1,
     "project": RELEASE_PROJECT,
@@ -128,16 +131,71 @@ def submit_release_prepare(number: int) -> dict[str, str]:
     return {"task_id": task_id, "queue": queue}
 
 
+def release_task_log_reason(task_id: str) -> str:
+    """Read only the newest bounded operations log for a known release task."""
+    log_root = gateway.STATE_ROOT / "logs"
+    if not log_root.is_dir() or log_root.is_symlink():
+        return ""
+    candidates: list[Path] = []
+    try:
+        for path in log_root.rglob("*.log"):
+            if task_id in path.name and path.is_file() and not path.is_symlink():
+                candidates.append(path)
+    except OSError:
+        return ""
+    if not candidates:
+        return ""
+    try:
+        newest = max(candidates, key=lambda path: path.stat().st_mtime)
+        size = newest.stat().st_size
+        with newest.open("rb") as handle:
+            if size > RELEASE_LOG_LIMIT:
+                handle.seek(size - RELEASE_LOG_LIMIT)
+            text = handle.read(RELEASE_LOG_LIMIT).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        if line in {"BLOCKED", "FAILED"} and index + 1 < len(lines):
+            return gateway.sanitize(lines[index + 1], 800)
+    return ""
+
+
+def report_release_task_state(number: int, record: dict) -> bool:
+    task_id = record.get("task_id")
+    if not isinstance(task_id, str):
+        return False
+    state, reason = gateway.task_public_state(task_id)
+    if not reason and state in {"blocked", "failed"}:
+        reason = release_task_log_reason(task_id)
+    if (
+        record.get("last_reported_state") == state
+        and record.get("last_reported_reason") == reason
+    ):
+        return False
+    text = f"AI PROF task update\nTask-ID: {task_id}\nState: {state}"
+    if reason:
+        text += f"\nReason: {reason}"
+    gateway.post_comment(number, text)
+    record["last_reported_state"] = state
+    record["last_reported_reason"] = reason
+    return True
+
+
+def mark_release_record(record: dict) -> dict:
+    record["kind"] = RELEASE_RECORD_KIND
+    return record
+
+
 def process_release_prepare_issue(issue: dict, issues_state: dict) -> bool:
     number = gateway.issue_number(issue)
     key = str(number)
     existing_record = issues_state.get(key)
     if isinstance(existing_record, dict):
-        return (
-            gateway.report_task_state(number, existing_record)
-            if existing_record.get("task_id")
-            else False
-        )
+        if existing_record.get("task_id"):
+            mark_release_record(existing_record)
+            return report_release_task_state(number, existing_record)
+        return False
     if not gateway.authorized_issue(issue):
         gateway.reject_once(number, issues_state, "UNAUTHORIZED_RELEASE_PREPARE_AUTHOR")
         return True
@@ -146,7 +204,8 @@ def process_release_prepare_issue(issue: dict, issues_state: dict) -> bool:
         parse_release_prepare_contract(issue)
         recovered = gateway.find_existing_task_for_issue(number)
         if recovered:
-            gateway._record_import(issues_state, number, recovered)
+            record = gateway._record_import(issues_state, number, recovered)
+            mark_release_record(record)
             gateway.post_comment(
                 number,
                 "AI PROF release prepare recovered the existing task after state reconciliation.\n"
@@ -164,7 +223,8 @@ def process_release_prepare_issue(issue: dict, issues_state: dict) -> bool:
         )
         return True
 
-    gateway._record_import(issues_state, number, created)
+    record = gateway._record_import(issues_state, number, created)
+    mark_release_record(record)
     gateway.post_comment(
         number,
         "AI PROF AK BERMET V6 release prepare imported\n"
@@ -176,14 +236,21 @@ def process_release_prepare_issue(issue: dict, issues_state: dict) -> bool:
 
 def install_runtime_adapters() -> None:
     original_process_issue = gateway.process_issue
+    original_report_task_state = gateway.report_task_state
 
     def process_issue(issue: dict, issues_state: dict) -> bool:
         if issue.get("title") == RELEASE_TITLE:
             return process_release_prepare_issue(issue, issues_state)
         return original_process_issue(issue, issues_state)
 
+    def report_task_state(number: int, record: dict) -> bool:
+        if record.get("kind") == RELEASE_RECORD_KIND:
+            return report_release_task_state(number, record)
+        return original_report_task_state(number, record)
+
     gateway.render_instructions = render_one_line_instructions
     gateway.process_issue = process_issue
+    gateway.report_task_state = report_task_state
 
 
 def main() -> int:

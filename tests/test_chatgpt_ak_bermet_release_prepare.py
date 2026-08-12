@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -89,23 +90,63 @@ class ChatGptAkBermetReleasePrepareTests(unittest.TestCase):
             mock.patch.object(service.gateway, "find_existing_task_for_issue", return_value=None),
             mock.patch.object(service, "submit_release_prepare", return_value=created) as submit,
             mock.patch.object(service.gateway, "post_comment") as comment,
-            mock.patch.object(service.gateway, "report_task_state", return_value=False) as report,
+            mock.patch.object(service, "report_release_task_state", return_value=False) as report,
         ):
             self.assertTrue(service.process_release_prepare_issue(release_issue(), state))
             self.assertFalse(service.process_release_prepare_issue(release_issue(), state))
         submit.assert_called_once_with(42)
         report.assert_called_once_with(42, state["42"])
         self.assertEqual(state["42"]["task_id"], created["task_id"])
+        self.assertEqual(state["42"]["kind"], service.RELEASE_RECORD_KIND)
         self.assertIn("read-only preparation only", comment.call_args.args[1])
 
+    def test_release_log_reason_is_bounded_and_sanitized(self):
+        task_id = "AK_BERMET_20260812T120000Z_ABCDEF"
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            logs = state_root / "logs/orchestrator"
+            logs.mkdir(parents=True)
+            (logs / f"{task_id}-operations-test.log").write_text(
+                "BLOCKED\nAK_BERMET_V6_PREPARE:FROZEN_SHA_MISMATCH token=supersecret\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(service.gateway, "STATE_ROOT", state_root):
+                reason = service.release_task_log_reason(task_id)
+        self.assertIn("FROZEN_SHA_MISMATCH", reason)
+        self.assertNotIn("supersecret", reason)
+
+    def test_blocked_release_state_uses_operations_log_reason(self):
+        record = {
+            "task_id": "AK_BERMET_20260812T120000Z_ABCDEF",
+            "kind": service.RELEASE_RECORD_KIND,
+            "last_reported_state": "queued",
+            "last_reported_reason": "",
+        }
+        with (
+            mock.patch.object(service.gateway, "task_public_state", return_value=("blocked", "")),
+            mock.patch.object(
+                service,
+                "release_task_log_reason",
+                return_value="AK_BERMET_V6_PREPARE:RELEASE_BRANCH_MISMATCH",
+            ),
+            mock.patch.object(service.gateway, "post_comment") as comment,
+        ):
+            self.assertTrue(service.report_release_task_state(19, record))
+        body = comment.call_args.args[1]
+        self.assertIn("State: blocked", body)
+        self.assertIn("Reason: AK_BERMET_V6_PREPARE:RELEASE_BRANCH_MISMATCH", body)
+        self.assertEqual(record["last_reported_reason"], "AK_BERMET_V6_PREPARE:RELEASE_BRANCH_MISMATCH")
+
     def test_install_adapter_preserves_ordinary_gateway_delegation(self):
-        original = service.gateway.process_issue
+        original_process = service.gateway.process_issue
+        original_report = service.gateway.report_task_state
         with mock.patch.object(service, "process_release_prepare_issue", return_value=True) as release_process:
             service.install_runtime_adapters()
             wrapped = service.gateway.process_issue
             self.assertTrue(wrapped(release_issue(), {}))
             release_process.assert_called_once()
-        service.gateway.process_issue = original
+        service.gateway.process_issue = original_process
+        service.gateway.report_task_state = original_report
 
 
 if __name__ == "__main__":
