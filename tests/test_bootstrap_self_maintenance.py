@@ -47,13 +47,14 @@ class BootstrapSelfMaintenanceTests(unittest.TestCase):
         git("clone", "-q", str(remote), str(source))
         return seed, source
 
-    def test_create_and_fast_forward_isolated_worktree(self):
+    def test_create_and_fast_forward_isolated_clone(self):
         with tempfile.TemporaryDirectory(prefix="ai-prof-bootstrap-") as tmp:
             root = Path(tmp)
             seed, source = self.make_remote_and_source(root)
             target = root / "maintenance"
 
             first = bootstrap.bootstrap(source, target)
+            self.assertTrue((target / ".git").is_dir())
             self.assertEqual(git("branch", "--show-current", cwd=target), "maintenance/base")
             self.assertEqual(git("status", "--porcelain", cwd=target), "")
             self.assertEqual(git("rev-parse", "HEAD", cwd=target), first)
@@ -66,8 +67,25 @@ class BootstrapSelfMaintenanceTests(unittest.TestCase):
 
             second = bootstrap.bootstrap(source, target)
             self.assertNotEqual(first, second)
+            self.assertTrue((target / ".git").is_dir())
             self.assertEqual(git("rev-parse", "HEAD", cwd=target), second)
             self.assertEqual((target / "README.md").read_text(encoding="utf-8"), "v2\n")
+
+    def test_converts_clean_legacy_linked_worktree_to_clone(self):
+        with tempfile.TemporaryDirectory(prefix="ai-prof-bootstrap-convert-") as tmp:
+            root = Path(tmp)
+            _seed, source = self.make_remote_and_source(root)
+            target = root / "maintenance"
+            git("branch", "maintenance/base", "origin/main", cwd=source)
+            git("worktree", "add", str(target), "maintenance/base", cwd=source)
+            self.assertTrue((target / ".git").is_file())
+
+            result = bootstrap.bootstrap(source, target)
+
+            self.assertTrue((target / ".git").is_dir())
+            self.assertEqual(git("branch", "--show-current", cwd=target), "maintenance/base")
+            self.assertEqual(git("rev-parse", "HEAD", cwd=target), result)
+            self.assertEqual(git("status", "--porcelain", cwd=target), "")
 
     def test_dirty_maintenance_checkout_blocks_without_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="ai-prof-bootstrap-dirty-") as tmp:
