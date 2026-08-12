@@ -5,8 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=agent
+Group=agent
 WorkingDirectory=/home/agent/projects/ai-prof-control-center
-ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/control_loop.py --daemon
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/control_loop_service.py --daemon
+Environment=HOME=/home/agent
 Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
 Restart=on-failure
 RestartSec=15
