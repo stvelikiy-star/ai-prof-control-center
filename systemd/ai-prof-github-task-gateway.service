@@ -1,0 +1,22 @@
+[Unit]
+Description=AI PROF private GitHub task gateway
+After=network-online.target ai-prof-control-center.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/github_task_gateway.py --poll-seconds 60
+Restart=on-failure
+RestartSec=15
+Environment=GH_PROMPT_DISABLED=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/agent/.config/gh
+ReadWritePaths=/home/agent/.local/state/ai-prof-control-center
+UMask=0077
+
+[Install]
+WantedBy=default.target
