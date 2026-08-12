@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -38,11 +37,37 @@ class RestoreSmokeTests(unittest.TestCase):
             restore.run(["echo", "ok"], cwd=Path("/tmp"), env={})
         self.assertIs(runner.call_args.kwargs["shell"], False)
 
-    def test_source_strips_production_credentials_and_never_links_remote(self):
+    def test_db_container_name_matches_supabase_cli_convention(self):
+        self.assertEqual(
+            restore.db_container_name("ak-bermet-restore-123"),
+            "supabase_db_ak-bermet-restore-123",
+        )
+
+    def test_docker_psql_runs_psql_inside_container(self):
+        completed = subprocess.CompletedProcess(["docker"], 0, "rooms\n", "")
+        with mock.patch.object(restore, "run", return_value=completed) as runner:
+            actual = restore.docker_psql(
+                "/usr/bin/docker",
+                "supabase_db_restore-test",
+                ["-Atq", "-c", "select 1"],
+                cwd=Path("/tmp"),
+                env={},
+            )
+        self.assertIs(actual, completed)
+        argv = runner.call_args.args[0]
+        self.assertEqual(argv[0:2], ["/usr/bin/docker", "exec"])
+        self.assertIn("supabase_db_restore-test", argv)
+        self.assertIn("psql", argv)
+        self.assertIn("PGPASSWORD=postgres", argv)
+
+    def test_source_has_no_host_psql_dependency_and_never_links_remote(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
         for key in ("SUPABASE_ACCESS_TOKEN", "SUPABASE_DB_PASSWORD", "PGPASSWORD", "DATABASE_URL"):
             self.assertIn(key, source)
         self.assertIn("env.pop(key, None)", source)
+        self.assertNotIn('shutil.which("psql")', source)
+        self.assertIn('shutil.which("docker")', source)
+        self.assertIn('return f"supabase_db_{project_id}"', source)
         self.assertNotIn('"--linked"', source)
         self.assertNotIn('"db", "push"', source)
         self.assertNotIn('"db", "reset"', source)
