@@ -1,0 +1,40 @@
+name: Control Center CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python syntax check
+        run: |
+          python -m compileall -q orchestrator tests scripts
+
+      - name: Full unit/integration test suite
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Ensure no tracked bytecode
+        run: |
+          if git ls-files | grep -E '(__pycache__/|\.pyc$)'; then
+            echo 'Tracked Python bytecode is forbidden.' >&2
+            exit 1
+          fi
