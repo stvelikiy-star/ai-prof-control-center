@@ -56,6 +56,7 @@ jobs:
           make_repo /home/agent/projects/ak-bermet-agent-pilot develop
           make_repo /home/agent/projects/ak-bermet main
           make_repo /home/agent/projects/ai-prof-control-center-maintenance maintenance/base
+          make_repo "/home/agent/Загрузки/kol-travel-platform" main
 
           mkdir -p /home/agent/projects/ai-prof-control-center-maintenance/orchestrator
           printf '# telegram fixture\n' > /home/agent/projects/ai-prof-control-center-maintenance/orchestrator/telegram_bridge.py
@@ -78,6 +79,16 @@ jobs:
           git -C /home/agent/projects/ak-bermet branch develop || true
           git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
 
+          cat > "/home/agent/Загрузки/kol-travel-platform/package.json" <<'JSON'
+          {
+            "scripts": {
+              "build": "true"
+            }
+          }
+          JSON
+          git -C "/home/agent/Загрузки/kol-travel-platform" add package.json
+          git -C "/home/agent/Загрузки/kol-travel-platform" commit -q -m 'add KOL package fixture'
+
       - name: Python syntax check
         run: |
           python -m compileall -q orchestrator tests scripts test_control_center.py
@@ -93,6 +104,13 @@ jobs:
             echo "===== $test_file ====="
             python "$test_file"
           done
+
+      - name: Publisher self-test
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}/orchestrator:${{ github.workspace }}
+        run: |
+          python3 orchestrator/approved_task_publisher.py --self-test
 
       - name: Self-maintenance exact unittest gate
         env:
