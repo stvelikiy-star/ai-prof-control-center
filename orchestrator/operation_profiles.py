@@ -40,10 +40,19 @@ AK_BERMET_SHEETS_MIRROR_DRY_RUN = OperationProfile(
     kind="sheets-mirror-dry-run",
 )
 
+AK_BERMET_STAFF_AUTH_ACTIVATE_DEV = OperationProfile(
+    key="ak-bermet-staff-auth-activate-dev",
+    repository=Path("/home/agent/projects/ak-bermet"),
+    base_branch="main",
+    expected_migration="",
+    kind="staff-auth-activate-dev",
+)
+
 PROFILES = {
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
     AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
     AK_BERMET_SHEETS_MIRROR_DRY_RUN.key: AK_BERMET_SHEETS_MIRROR_DRY_RUN,
+    AK_BERMET_STAFF_AUTH_ACTIVATE_DEV.key: AK_BERMET_STAFF_AUTH_ACTIVATE_DEV,
 }
 
 
