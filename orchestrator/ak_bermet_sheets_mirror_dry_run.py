@@ -219,6 +219,7 @@ def execute(node: Path, requested_path: str, base_environment: dict[str, str] | 
     if STATE_WORKTREE_ROOT.is_symlink():
         raise RuntimeDryRunBlocked("RUNTIME_WORKTREE_ROOT_UNSAFE")
     temporary = Path(tempfile.mkdtemp(prefix="ak-bermet-sheets-", dir=STATE_WORKTREE_ROOT))
+    temporary.rmdir()  # git worktree add requires the target path not to exist.
     added = False
     cleanup_error = False
     result: RuntimeDryRunResult | None = None
