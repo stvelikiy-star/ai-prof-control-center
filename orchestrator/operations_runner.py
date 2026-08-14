@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict allowlisted runner for production operations.
+"""Strict allowlisted runner for production and runtime operations.
 
 Task prose is metadata only. Every executable and argument is constructed
 locally from an immutable profile, and every child uses shell=False.
@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ak_bermet_release_v6_prepare as release_v6
+import ak_bermet_sheets_mirror_dry_run as sheets_mirror
 from operation_profiles import OperationProfile, resolve_profile
 from runtime_paths import DEFAULT_STATE_ROOT
 
@@ -55,6 +56,9 @@ UNSAFE_ENVIRONMENT_NAMES = frozenset({
     "NPM_CONFIG_SCRIPT_SHELL",
     "npm_config_script_shell",
 })
+LEGACY_SHEETS_DRY_RUN_GOAL = "Sheets mirror runtime dry-run"
+LEGACY_SHEETS_DRY_RUN_PROFILE = "ak-bermet-sheets-mirror-dry-run"
+LEGACY_SHEETS_DRY_RUN_PROJECT = "/home/agent/projects/ak-bermet"
 
 
 class OperationBlocked(RuntimeError):
@@ -251,9 +255,27 @@ def execute_release_v6_prepare(profile: OperationProfile, requested_path: str) -
     return "release_ready"
 
 
+def execute_sheets_mirror_dry_run(profile: OperationProfile, requested_path: str) -> str:
+    if requested_path != str(profile.repository):
+        raise OperationBlocked("operation repository does not exactly match registered path")
+    if profile.kind != "sheets-mirror-dry-run":
+        raise OperationBlocked("invalid Sheets mirror operation kind")
+    node_bin = locate_node_bin()
+    environment = operation_environment(node_bin)
+    try:
+        result = sheets_mirror.execute(node_bin / "node", requested_path, environment)
+    except sheets_mirror.RuntimeDryRunBlocked as exc:
+        raise OperationBlocked(str(exc)) from exc
+    except sheets_mirror.RuntimeDryRunFailed as exc:
+        raise OperationFailed(str(exc)) from exc
+    return result.summary()
+
+
 def execute_profile(profile: OperationProfile, requested_path: str) -> str:
     if profile.kind == "release-v6-prepare":
         return execute_release_v6_prepare(profile, requested_path)
+    if profile.kind == "sheets-mirror-dry-run":
+        return execute_sheets_mirror_dry_run(profile, requested_path)
     if profile.kind != "migration":
         raise OperationBlocked("unsupported operation profile kind")
 
@@ -314,15 +336,53 @@ def execute_profile(profile: OperationProfile, requested_path: str) -> str:
     return "already_applied" if already_applied else "applied"
 
 
+def legacy_runtime_profile(data: dict[str, str]) -> str | None:
+    """Narrow compatibility bridge for the already-published Telegram command.
+
+    Generic /ai task intake predates runtime operation profiles and labels the
+    task as code. Only this exact immutable goal/project pair is promoted. The
+    user-supplied Instructions and Scope-Files are never executed by this path.
+    """
+    if (
+        data.get("Execution-Mode") == "code"
+        and data.get("Project-Path") == LEGACY_SHEETS_DRY_RUN_PROJECT
+        and data.get("Goal") == LEGACY_SHEETS_DRY_RUN_GOAL
+        and data.get("Operation-Profile") == "none"
+    ):
+        return LEGACY_SHEETS_DRY_RUN_PROFILE
+    return None
+
+
+def _terminal_reason(path: Path, field: str, reason: str) -> None:
+    safe = re.sub(r"[\x00-\x1f\x7f]+", " ", redact(reason)).strip()[:500] or "UNKNOWN"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    pattern = re.compile(rf"(?mi)^\s*{re.escape(field)}:\s*[^\r\n]*$")
+    line = f"{field}: {safe}"
+    if pattern.search(text):
+        updated = pattern.sub(line, text, count=1)
+    else:
+        updated = text.rstrip("\n") + "\n" + line + "\n"
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError:
+        return
+
+
 def process_one(paths: orch.Paths) -> int:
     task: Path | None = None
+    promoted_profile: str | None = None
     for candidate in sorted(paths.pending.glob("*.md")):
         try:
             data, _ = orch.parse_task(candidate)
         except Exception:
             continue
-        if data["Execution-Mode"] == "operations":
+        profile = legacy_runtime_profile(data)
+        if data["Execution-Mode"] == "operations" or profile:
             task = candidate
+            promoted_profile = profile
             break
     if task is None:
         print("QUEUE_EMPTY")
@@ -332,8 +392,9 @@ def process_one(paths: orch.Paths) -> int:
     log_path = paths.logs / f"{active.stem}-operations-{timestamp}.log"
     try:
         data, _task_text = orch.parse_task(active)
+        profile_key = promoted_profile or data["Operation-Profile"]
         try:
-            profile = resolve_profile(data["Operation-Profile"])
+            profile = resolve_profile(profile_key)
         except ValueError as exc:
             raise OperationBlocked(str(exc)) from exc
         outcome = execute_profile(profile, data["Project-Path"])
@@ -342,19 +403,32 @@ def process_one(paths: orch.Paths) -> int:
             f"task_id={data['Task-ID']}\n"
             f"profile={profile.key}\n"
             f"outcome={outcome}\n"
-            "task_text_executed=false\nshell=false\nworking_tree=clean\n"
+            f"legacy_runtime_promotion={'true' if promoted_profile else 'false'}\n"
+            "task_text_executed=false\nshell=false\nworking_tree=preserved\n"
         )
         log_path.write_text(redact(summary), encoding="utf-8")
         orch.safe_move(active, paths.completed)
         print("PASS")
         return 0
     except OperationBlocked as exc:
-        log_path.write_text(redact(f"BLOCKED\n{exc}\n"), encoding="utf-8")
+        safe = redact(str(exc))
+        _terminal_reason(active, "Blocked-Reason", safe)
+        log_path.write_text(redact(f"BLOCKED\n{safe}\n"), encoding="utf-8")
         if active.exists():
             orch.safe_move(active, paths.blocked)
         print("BLOCKED", file=sys.stderr)
         return 1
+    except OperationFailed as exc:
+        safe = redact(str(exc))
+        _terminal_reason(active, "Failure-Reason", safe)
+        log_path.write_text(redact(f"FAILED\n{safe}\n"), encoding="utf-8")
+        if active.exists():
+            orch.safe_move(active, paths.failed)
+        print("FAILED", file=sys.stderr)
+        return 1
     except Exception as exc:
+        reason = f"UNEXPECTED_{type(exc).__name__}"
+        _terminal_reason(active, "Failure-Reason", reason)
         log_path.write_text(redact(f"FAILED\n{type(exc).__name__}: {exc}\n"), encoding="utf-8")
         if active.exists():
             orch.safe_move(active, paths.failed)
