@@ -32,18 +32,9 @@ AK_BERMET_PRODUCTION_PREPARE_V6 = OperationProfile(
     kind="release-v6-prepare",
 )
 
-KOL_BLOCKED_TASK_RECOVERY_V1 = OperationProfile(
-    key="kol-blocked-task-recovery-v1",
-    repository=Path("/home/agent/Загрузки/kol-travel-platform"),
-    base_branch="main",
-    expected_migration="",
-    kind="kol-blocked-recovery-v1",
-)
-
 PROFILES = {
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
     AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
-    KOL_BLOCKED_TASK_RECOVERY_V1.key: KOL_BLOCKED_TASK_RECOVERY_V1,
 }
 
 
