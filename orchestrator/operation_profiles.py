@@ -32,9 +32,18 @@ AK_BERMET_PRODUCTION_PREPARE_V6 = OperationProfile(
     kind="release-v6-prepare",
 )
 
+AK_BERMET_SHEETS_MIRROR_DRY_RUN = OperationProfile(
+    key="ak-bermet-sheets-mirror-dry-run",
+    repository=Path("/home/agent/projects/ak-bermet"),
+    base_branch="main",
+    expected_migration="",
+    kind="sheets-mirror-dry-run",
+)
+
 PROFILES = {
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
     AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
+    AK_BERMET_SHEETS_MIRROR_DRY_RUN.key: AK_BERMET_SHEETS_MIRROR_DRY_RUN,
 }
 
 
