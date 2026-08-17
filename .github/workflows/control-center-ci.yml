@@ -105,12 +105,13 @@ jobs:
             python "$test_file"
           done
 
-      - name: Publisher self-test
+      - name: Publisher self-tests
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           PYTHONPATH: ${{ github.workspace }}/orchestrator:${{ github.workspace }}
         run: |
           python3 orchestrator/approved_task_publisher.py --self-test
+          python3 orchestrator/ak_bermet_approved_task_publisher_gate.py --self-test
 
       - name: Self-maintenance exact unittest gate
         env:
