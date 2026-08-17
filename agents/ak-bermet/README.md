@@ -1,43 +1,57 @@
-# AK BERMET Project Agent V2
+# AK BERMET Project Agent V3
 
-Финальный пакет специализированного агента знаний и управления проектом AK BERMET.
+Актуальный пакет специализированного управляющего агента проекта AK BERMET.
 
 ## Назначение
 
 Агент:
-- хранит подтверждённые бизнес-решения;
-- различает проектирование, реализацию в коде, статический аудит, staging-проверку и production;
-- формирует задания Claude Code;
-- формирует независимые задания Codex;
-- ведёт состояние, решения, риски и roadmap;
-- не выполняет опасные действия без разрешения владельца.
+- хранит и обновляет подтверждённые бизнес-решения;
+- синхронизируется с текущим GitHub `main` и новым evidence;
+- различает APPROVED / IMPLEMENTED / STATIC_PASS / DEV_PASS / UAT_PASS / PRODUCTION / UNKNOWN / BLOCKED;
+- формирует и ведёт технические задачи для Codex;
+- использует Codex как основного технического исполнителя и отдельного независимого аудитора;
+- ведёт состояние, решения, риски и autonomous-delivery roadmap;
+- продолжает обычные технические циклы без владельца, пока не пересечён owner approval gate;
+- не предоставляет production authority автоматически.
+
+Claude в текущем рабочем контуре AK BERMET не используется.
+
+## Команда
+
+- GPT / ChatGPT — управляющий агент, архитектор, PM.
+- Codex — технический исполнитель и независимый аудитор.
+- AI PROF / Control Center — task/operations/campaign orchestration и bounded repair.
+- GitHub — source of truth.
+- Owner — business, legal, prices, real data, secrets, production approval.
 
 ## Обязательные файлы
 
-- `SYSTEM_INSTRUCTIONS.md` — постоянные инструкции агента.
+- `SYSTEM_INSTRUCTIONS.md` — постоянные инструкции V3.
 - `KNOWLEDGE_BASE.md` — подтверждённая база знаний.
-- `STATE.md` — текущее состояние по уровням доказательности.
+- `STATE.md` — актуальное состояние и autonomy blockers.
 - `DECISIONS.md` — журнал утверждённых решений.
-- `OPEN_RISKS.md` — незакрытые риски.
-- `ROADMAP.md` — поэтапный план.
-- `APPROVAL_MATRIX.md` — что агент может делать сам, а что требует владельца.
-- `SOURCE_POLICY.md` — правила актуальности и доказательности.
-- `TASK_INSTALL_AGENT.md` — задача установки в AI PROF Control Center.
-- `TASK_PHASE_01_VERIFY_RUNTIME.md` — первая рабочая задача после установки.
-- `validate_agent_package.sh` — локальная проверка пакета.
+- `OPEN_RISKS.md` — реальные открытые риски.
+- `ROADMAP.md` — приоритетный autonomous delivery plan.
+- `APPROVAL_MATRIX.md` — границы автономности и owner gates.
+- `SOURCE_POLICY.md` — правила source of truth и evidence.
 
-## Принцип
+Исторические task-файлы могут оставаться в пакете для аудита, но не определяют текущую очередь и не имеют приоритета над V3 + GitHub `main`.
 
-Нельзя называть функцию готовой только потому, что:
-- создана миграция;
+## Текущий принцип работы
+
+Технический цикл:
+
+`актуальный main → отдельная ветка → Codex execution → required checks → independent Codex audit → bounded repair при FAIL → trusted PR publication → следующий этап`
+
+Владелец подключается только к реальному approval gate.
+
+## Production-ready
+
+Нельзя называть функцию production-ready только потому, что:
+- существует миграция;
 - написан интерфейс;
-- прошёл TypeScript;
-- получен статический PASS.
+- прошёл TypeScript/build;
+- получен статический PASS;
+- DEV/UAT прошёл на другом target.
 
-Production-ready означает:
-1. код реализован;
-2. миграции применены на staging;
-3. role matrix и интеграционные тесты пройдены;
-4. UAT пройден;
-5. production deployment одобрен владельцем;
-6. есть rollback и backup evidence.
+Production-ready требует актуального evidence для конкретного release state, валидированного backup/rollback и отдельного production approval владельца.
