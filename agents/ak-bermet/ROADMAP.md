@@ -1,130 +1,81 @@
-# AK BERMET — STAGED DELIVERY ROADMAP
+# AK BERMET — AUTONOMOUS DELIVERY ROADMAP
 
-## Phase 00 — Project Agent installation
-Goal: установить пакет знаний в Control Center.
-Gate: Codex PASS.
-Production changes: none.
+Дата актуализации: 2026-08-17
 
-## Phase 01 — Runtime truth verification
+## Priority A0 — Agent context truth
+
 Goal:
-- определить фактическое состояние `develop`;
-- определить staging Supabase;
-- получить migration ledger;
-- выполнить clean apply;
-- проверить btree_gist;
-- выполнить role matrix;
-- проверить direct API, triggers и overlap.
+- убрать устаревшие Claude/develop правила;
+- закрепить `main` как source of truth;
+- закрепить GPT → Codex → AI PROF рабочую модель;
+- ограничить owner gates только реальными бизнес/production решениями.
 
 Gate:
-- STAGING_PASS;
-- нет Critical/High;
-- отчёт с evidence.
+- agent package V3 consistent;
+- нет противоречий между SYSTEM_INSTRUCTIONS / STATE / APPROVAL_MATRIX / ROADMAP.
 
-## Phase 02 — Inventory and staff foundation
+## Priority A1 — Codex primary execution
+
 Goal:
-- импортировать и сверить 169 units;
-- создать роли и 17 тестовых пользователей;
-- проверить ограничения видимости.
+- AK BERMET code-task path использует Codex как основного технического исполнителя;
+- Claude не вызывается для AK BERMET;
+- независимый audit остаётся отдельным шагом.
 
 Gate:
-- reconciliation = 169 units / 407 official / 484 max;
-- role access PASS;
-- секреты не раскрыты.
+- contract tests подтверждают, что AK BERMET task не маршрутизируется в Claude runner;
+- техническая задача выполняется Codex runner в отдельной ветке;
+- required checks запускаются до audit.
 
-## Phase 03 — Housekeeping workspace
+## Priority A2 — Trusted AK BERMET publisher
+
 Goal:
-- assignments;
-- accept/start/complete;
-- after photo;
-- problem reporting;
-- before/after photos;
-- auto assignment + admin override.
+- после Stage 01B/01C PASS автоматически публиковать только approved AK BERMET branch;
+- commit/push/PR строго по Scope-Files;
+- base = `main`;
+- без merge/deploy/database/secrets authority на первом этапе.
 
 Gate:
-- role/RLS tests;
-- mobile UAT;
-- audit history.
+- exact AK BERMET path/repository pinned;
+- changed files находятся только в approved scope;
+- commit/push/PR работает;
+- owner checkout возвращается в clean `main`;
+- production mutation = false.
 
-## Phase 04 — Technician workspace
+## Priority A3 — Telegram E2E
+
 Goal:
-- maintenance requests;
-- diagnosis;
-- work/materials;
-- result photo;
-- blocked/maintenance states.
+- владелец отправляет одну `/ai task` команду;
+- AI PROF создаёт задачу;
+- Codex выполняет;
+- checks + audit проходят;
+- publisher создаёт PR;
+- Telegram возвращает финальный статус и PR.
 
 Gate:
-- status/RLS tests;
-- mobile UAT;
-- history.
+- один реальный PASS E2E без ручного SSH между стадиями.
 
-## Phase 05 — Administrator inspection
+## Priority A4 — Autonomous repair
+
 Goal:
-- inspection after complaint/problem/repair;
-- approve/reject;
-- ready only after required checks.
+- технический FAIL автоматически переводится в bounded repair cycle;
+- exact diagnostics передаются следующему Codex запуску;
+- не более установленного max fix cycles;
+- security/infrastructure/owner gates остаются BLOCKED.
 
 Gate:
-- forbidden transitions rejected;
-- audit trail complete.
+- один контролируемый FAIL → repair → PASS E2E;
+- owner не участвует в обычном repair cycle.
 
-## Phase 06 — Booking, hold and availability integrity
+## Priority A5 — Merge policy
+
 Goal:
-- 60-minute hold;
-- expiry;
-- transaction/concurrency;
-- no overlap;
-- blocked rooms excluded.
+- определить и протестировать безопасный auto-merge только для низкорисковых технических PR AK BERMET;
+- required CI + Codex PASS обязательны;
+- business/production gates исключены.
 
 Gate:
-- parallel tests PASS;
-- rollback PASS.
+- отдельная reviewed policy;
+- protected `main` не обходится;
+- production deploy authority не добавляется.
 
-## Phase 07 — Payments
-Goal:
-- amount, method, date, balance, manager confirmation;
-- link to booking;
-- audit.
-
-Gate:
-- reconciliation and permissions PASS.
-
-## Phase 08 — Current booking migration
-Goal:
-- mapping;
-- dry-run;
-- duplicate handling;
-- reconciliation;
-- rollback;
-- owner-approved cutover.
-
-Gate:
-- owner approval;
-- backup;
-- zero unresolved blocking discrepancies.
-
-## Phase 09 — Integrations
-Goal:
-- Google Sheets reporting/export;
-- n8n;
-- Telegram Control Center;
-- AI assistant with restricted permissions.
-
-Gate:
-- secrets isolated;
-- retries/idempotency;
-- failure notifications.
-
-## Phase 10 — UAT and production launch
-Goal:
-- end-to-end UAT;
-- security regression;
-- backup/restore;
-- observability;
-- production checklist.
-
-Gate:
-- owner approval;
-- Codex PASS;
-- rollback ready;
-- launch report.
+До A0–A4 новые крупные продуктовые функции не являются приоритетом. После закрытия delivery loop он используется для оставшихся release, backup, визуальных и production-readiness задач AK BERMET.

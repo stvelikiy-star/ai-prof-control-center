@@ -1,46 +1,45 @@
 # AK BERMET — OPEN RISKS
 
-## R-01 — Live database not evidenced
+Дата актуализации: 2026-08-17
+
+## R-01 — Production target identity
 Severity: Critical for launch
 Status: OPEN
-Нужны staging project reference, migration ledger и clean apply evidence.
+DEV-проект подтверждён, но фактический production Supabase target должен быть явно идентифицирован до production backup/migration/deploy.
 
-## R-02 — Runtime RLS matrix not evidenced
-Severity: Critical
-Status: OPEN
-Проверить anon и все роли, inactive, soft-deleted, role removal, cross-assignment, direct API.
-
-## R-03 — Booking concurrency not evidenced
+## R-02 — Production backup/restore evidence
 Severity: High
 Status: OPEN
-Проверить параллельные holds/bookings и exclusion/transaction behavior.
+DEV/preflight контур улучшен, но нужен валидированный backup + restore drill для фактического production target.
 
-## R-04 — Operational workflows incomplete
-Severity: High
+## R-03 — Autonomous publisher missing for AK BERMET
+Severity: High for agent autonomy
 Status: OPEN
-Housekeeping и technician pages нельзя считать готовыми без реальных действий, assignment и фото.
+Generic AK BERMET task profile пока не может автоматически commit/push/PR. Trusted publisher сейчас KÖL-only.
 
-## R-05 — Data migration not designed end-to-end
-Severity: High
+## R-04 — Executor routing may still reference Claude
+Severity: High for agent autonomy
 Status: OPEN
-Нужны mapping, dry-run, reconciliation, duplicate policy, rollback и cutover plan.
+Project instructions уже переводятся на Codex-only, но runtime dispatch нужно проверить contract tests и реальным E2E.
 
-## R-06 — Test users not created
-Severity: Medium
-Status: OPEN
-Создавать только через безопасный Admin API/Dashboard; временные пароли не коммитить и не печатать в отчётах.
-
-## R-07 — Telegram/n8n linkage not evidenced
-Severity: Medium
-Status: OPEN
-Группа создана, но техническое подключение к Control Center должно быть проверено отдельно.
-
-## R-08 — Stale documentation
-Severity: Low
+## R-05 — Telegram delivery E2E not freshly evidenced
+Severity: High for agent autonomy
 Status: VERIFY
-Проверить README и удалить устаревшие упоминания `/manager/login` PIN.
+Bridge и Control Center ранее отвечали, но нужен свежий PASS: Telegram task → Codex → checks → audit → PR/status.
 
-## R-09 — Backup/restore not evidenced
-Severity: High
-Status: OPEN
-Нужен backup, restore drill и rollback для миграции.
+## R-06 — Repair E2E not freshly evidenced
+Severity: Medium
+Status: VERIFY
+Auto-repair механизм существует, но нужен контролируемый FAIL → repair → PASS тест именно для AK BERMET Codex-only path.
+
+## R-07 — Stale project documentation
+Severity: Medium
+Status: IN_PROGRESS
+`agents/ak-bermet/*` и `ak-bermet/ai-system/CURRENT_STATE.md` содержали июльские Claude/develop/Google-Sheets-only утверждения. Agent package V3 исправляет Control Center side; project-side current state тоже должен быть обновлён отдельным безопасным PR.
+
+## RESOLVED / NO LONGER OPEN
+
+- 17 DEV staff accounts: provisioned and real-session UAT PASS.
+- DEV staff role checks: 85 role checks + 8 policy checks PASS.
+- Migration ledger/runtime security state: существенно продвинут и подтверждался после последних repair migrations; не считать это production evidence.
+- Основные 3-day/G00 campaigns: ранее завершены; не использовать старые blocked записи как текущее состояние без свежего evidence.

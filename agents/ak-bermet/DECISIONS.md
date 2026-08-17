@@ -32,3 +32,22 @@ AI не имеет права переводить номер в ready.
 
 ## 2026-07-24 — Payment phase 1
 Хранить сумму, способ, дату, остаток и подтверждение менеджера. Онлайн-оплату подключать позже.
+
+## 2026-08-17 — Git source of truth
+Текущий GitHub `main` и новые подтверждённые результаты имеют приоритет над историческими ветками, старым STATE и старым master context. `develop` не считать текущим source of truth без явной причины конкретной задачи.
+
+## 2026-08-17 — Agent team
+Текущий рабочий состав AK BERMET:
+- GPT / ChatGPT — управляющий агент, архитектор, project manager;
+- Codex — основной технический исполнитель и независимый аудитор;
+- AI PROF / Control Center — оркестрация;
+- GitHub — source of truth;
+- Owner — business/legal/prices/real-data/secrets/production approval.
+
+Claude в текущем рабочем контуре AK BERMET не использовать.
+
+## 2026-08-17 — Autonomous technical authority
+Технические изменения внутри уже утверждённого scope должны идти автономно: branch → Codex execution → required checks → independent Codex audit → repair if needed → trusted PR publication. Владелец не вызывается между техническими стадиями, если owner gate не пересечён.
+
+## 2026-08-17 — Production boundary
+Автономность технического delivery loop не означает production authority. Production migration/deploy/cutover, реальные данные и secrets остаются отдельными owner gates.

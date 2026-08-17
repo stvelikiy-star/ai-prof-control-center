@@ -1,44 +1,41 @@
 # AK BERMET — CURRENT STATE
 
-Дата фиксации: 2026-07-24
+Дата фиксации: 2026-08-17
 
 ## APPROVED
 
-- AK BERMET — полноценный production-проект.
-- Целевая архитектура: единая CRM + Supabase/PostgreSQL.
-- Полный цикл booking → checkout → cleaning → ready.
-- Удержание: 60 минут.
-- Правила уборки, фото, ремонта и проверки администратора.
-- Состав первых пользователей.
-- Перенос актуальных броней и последующий Supabase cutover.
-- Первый этап учёта оплат.
+- AK BERMET — полноценный production-проект SPA & WELLNESS.
+- GitHub `main` — source of truth для текущего кода.
+- GPT = управляющий агент/архитектор/PM.
+- Codex = основной технический исполнитель и независимый аудитор.
+- AI PROF / Control Center = оркестрация задач и operations.
+- Claude в текущем рабочем контуре AK BERMET не используется.
+- Owner подключается только к бизнесовым, legal, price, real-data, secret и production gates.
 
-## IMPLEMENTED / STATIC_PASS
+## VERIFIED / PASS
 
-- Supabase Auth и роли добавлены в код.
-- Операционные миграции подготовлены.
-- Security blockers из Audit 001 исправлены.
-- Soft-deleted manager direct API defect исправлен.
-- Targeted security re-audit: PASS.
-- Изменения объединены в `develop`.
-- Baseline lint, TypeScript и production build ранее проходили.
+- Кампания `AK_BERMET_3DAY_RELEASE_01` ранее завершена 9/9.
+- Кампания `AK_BERMET_G00_REPAIR_01` ранее завершена 4/4.
+- DEV staff auth runtime operation для 17 утверждённых сотрудников слита в Control Center через PR #77.
+- 17 staff sessions были проверены реальным DEV UAT: 17 slots, 85 role checks, 8 policy checks — PASS.
+- DEV role/RLS repair chain и audit-trigger security fixes подтверждались после последних миграций.
+- Production structural preflight был доведён до PASS после настройки database URL contract; сам preflight не выполняет deploy/migration/write.
 
-## UNKNOWN — обязательно проверить
+## CURRENT AGENT-AUTONOMY BLOCKERS
 
-- наличие и параметры staging Supabase;
-- точный список применённых миграций;
-- clean migration reset/apply;
-- btree_gist;
-- runtime RLS role matrix;
-- runtime trigger behavior;
-- runtime booking overlap/concurrency;
-- импорт номерного фонда;
-- создание 17 тестовых пользователей;
-- реальные housekeeping/technician workflows;
-- Telegram/n8n technical connection to Control Center;
-- backup/restore evidence;
-- production environment readiness.
+1. Project-agent instructions были устаревшими: Claude/develop/owner-on-every-cycle. Исправляются в V3.
+2. AK BERMET generic task profile пока имеет `allow_commits=false`, `allow_push=false`, `allow_merge=false`.
+3. Trusted `approved_task_publisher.py` сейчас KÖL-only; AK BERMET не умеет автоматически публиковать прошедший audit результат в PR.
+4. Нужно подтвердить, что code execution path для AK BERMET использует Codex как основного исполнителя, а не Claude runner.
+5. Нужен один живой E2E: Telegram `/ai task` → Codex change → required checks → independent audit → PR → Telegram terminal result.
+6. Нужен fail/retry E2E, чтобы технический FAIL автоматически создавал ограниченный repair cycle без владельца.
 
-## BLOCKED
+## PRODUCTION / RELEASE REMAINS GATED
 
-Production deployment и миграция реальных данных заблокированы до завершения Phase 01 runtime verification.
+- Production target должен быть явно идентифицирован; DEV нельзя молча считать production.
+- Backup/restore evidence должен быть завершён для фактического production target.
+- Production migration/deploy/cutover требует отдельного owner approval.
+
+## NEXT
+
+Текущий приоритет — не новые продуктовые функции. Приоритет: закрыть автономный AI PROF delivery loop для AK BERMET в течение одного рабочего цикла, затем использовать его для оставшихся release задач.
