@@ -18,7 +18,19 @@ import control_loop_service
 
 class AkBermetApprovedPublisherTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._publisher_state = {
+            "KOL_PROJECT": publisher.KOL_PROJECT,
+            "KOL_REPOSITORY": publisher.KOL_REPOSITORY,
+            "KOL_BASE_BRANCH": publisher.KOL_BASE_BRANCH,
+            "OWNER": publisher.OWNER,
+            "parse_source_issue": publisher.parse_source_issue,
+            "post_source_comment": publisher.post_source_comment,
+        }
         gate.configure_ak_bermet_profile()
+
+    def tearDown(self) -> None:
+        for name, value in self._publisher_state.items():
+            setattr(publisher, name, value)
 
     def sample(self, branch: str, instructions: str = "owner task") -> str:
         return "\n".join(
