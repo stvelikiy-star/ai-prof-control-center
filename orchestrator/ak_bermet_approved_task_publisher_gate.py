@@ -10,6 +10,9 @@ Accepted intake identities are deliberately narrow:
 - the existing authorized private GitHub issue contract; or
 - the exact random branch shape produced by the owner-only Telegram bridge.
 
+Other AK BERMET approved items, such as campaign/integration tasks, are left to
+their own runner rather than being treated as publisher failures.
+
 It never merges, deploys, touches databases, reads secrets, or executes task
 prose as shell input.
 """
@@ -18,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import approved_task_publisher as publisher
@@ -40,6 +44,13 @@ _ORIGINAL_COMMIT = publisher.commit_approved_change
 _ORIGINAL_PROCESS_TASK = publisher.process_task
 _ORIGINAL_PARSE_SOURCE = publisher.parse_source_issue
 _ORIGINAL_POST_SOURCE_COMMENT = publisher.post_source_comment
+
+
+def _is_publication_branch(work_branch: str) -> bool:
+    return bool(
+        publisher.WORK_BRANCH_RE.fullmatch(work_branch)
+        or TELEGRAM_WORK_BRANCH_RE.fullmatch(work_branch)
+    )
 
 
 def _parse_ak_bermet_source(task_text: str, work_branch: str) -> int:
@@ -179,6 +190,49 @@ def _process_task_with_target_gate(paths, task) -> int:
     return _ORIGINAL_PROCESS_TASK(paths, task)
 
 
+def _process_one_ak_bermet(paths) -> int:
+    """Consume only approved AK BERMET items intended for PR publication."""
+    supported: list[Path] = []
+    for task in sorted(paths.approved.glob("*.md")):
+        try:
+            text = task.read_text(encoding="utf-8", errors="strict")
+        except (OSError, UnicodeError):
+            continue
+        if publisher.field(text, "Project-Path") != str(AK_BERMET_PROJECT):
+            continue
+        if not _is_publication_branch(publisher.field(text, "Work-Branch")):
+            continue
+        supported.append(task)
+
+    if supported:
+        task = supported[0]
+        try:
+            return publisher.process_task(paths, task)
+        except Exception as exc:
+            task_id = publisher.field(
+                task.read_text(encoding="utf-8", errors="replace"),
+                "Task-ID",
+            ) or task.stem
+            publisher.write_log(
+                paths,
+                task_id,
+                "AK_BERMET_APPROVED_TASK_PUBLISHER_BLOCKED\n"
+                f"{type(exc).__name__}: {publisher.redact(exc)}",
+            )
+            print(
+                f"AK_BERMET_APPROVED_TASK_PUBLISHER_BLOCKED: {publisher.redact(exc)}",
+                file=sys.stderr,
+            )
+            return 1
+
+    print(
+        "AK_BERMET_APPROVED_TASK_PUBLISHER_IDLE_MAIN_SYNCED"
+        if publisher.sync_clean_main(AK_BERMET_PROJECT)
+        else "AK_BERMET_APPROVED_TASK_PUBLISHER_IDLE"
+    )
+    return 0
+
+
 def _sample(work_branch: str, instructions: str) -> str:
     return "\n".join(
         [
@@ -221,7 +275,9 @@ def run_self_test() -> int:
         "fix/telegram-0123abcd-012345abcdef",
         "feature/telegram-0123ABCD-012345abcdef",
         "feature/arbitrary",
+        "integration/ak-bermet-3day",
     ):
+        assert not _is_publication_branch(bad_branch)
         try:
             publisher.validate_supported_task(
                 _sample(bad_branch, "owner-requested technical change")
@@ -248,6 +304,7 @@ def main() -> int:
     configure_ak_bermet_profile()
     publisher.commit_approved_change = _commit_or_resume
     publisher.process_task = _process_task_with_target_gate
+    publisher.process_one = _process_one_ak_bermet
     result = publisher.main()
     # control_loop treats child rc=1 as a normal task result. Publishing is a
     # repository-state gate, so any publisher failure halts the cycle.
