@@ -74,7 +74,7 @@ class SubmitTaskV2Tests(unittest.TestCase):
     def test_telegram_v4_routes_to_intake_v2(self) -> None:
         self.assertEqual(
             bridge_v4.SUBMIT_TASK_V2,
-            legacy.ROOT / "orchestrator/submit_task_v2.py",
+            ROOT / "orchestrator/submit_task_v2.py",
         )
 
 
