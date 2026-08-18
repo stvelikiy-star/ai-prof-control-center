@@ -22,6 +22,7 @@ _ORIGINAL_SELECT_SCOPE = legacy.select_scope
 _EXPLICIT_PATH_RE = re.compile(
     r"(?<![A-Za-z0-9._/-])((?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+)(?![A-Za-z0-9._/-])"
 )
+SUBMIT_TASK_V2 = legacy.ROOT / "orchestrator/submit_task_v2.py"
 
 
 def _safe_project_relative(path: str) -> bool:
@@ -68,6 +69,7 @@ def select_scope_v4(command, project_id: str, project: dict) -> str:
 
 def main() -> int:
     legacy.select_scope = select_scope_v4
+    legacy.SUBMIT_TASK = SUBMIT_TASK_V2
     return v3.main()
 
 
