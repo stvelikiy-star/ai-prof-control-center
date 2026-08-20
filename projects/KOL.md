@@ -96,6 +96,36 @@ Repository draft PRs prepared on 2026-08-20:
 - PR #21 — additive FK index baseline stacked on #13
   - 49 missing single-column FK indexes
   - no index deletion
+- PR #22 — provider-neutral payment integrity stack on #13
+  - service-role-only payment attempt/event RPCs
+  - amount and payer derived from authoritative order/booking state
+  - unique provider reference + idempotent provider event ledger
+  - raw provider payload not stored; SHA-256 hash + sanitized metadata only
+  - paid amount mismatch fails closed
+  - duplicate settlements preserved/audited for review
+  - automatic refund application remains OFF
+  - direct browser/session payment mutation closed
+- PR #23 — atomic delivery lifecycle stack on #13
+  - closes broad direct delivery mutation from authenticated sessions
+  - dispatcher-only safe courier assignment
+  - exact courier-owned physical state machine
+  - assignment/status/history/audit atomic
+  - pickup/delivered may update eligible operational order status
+  - payment_status is never mutated by delivery RPCs
+  - delivery pricing/row creation remains separate until fee policy exists
+- PR #24 — observability/rollback stack on #20
+  - `x-request-id` correlation through middleware/session refresh
+  - health endpoint explicitly distinguishes configuration readiness from DB connectivity
+  - deterministic `check:release-source`
+  - rollback/recovery runbook
+  - source and staged migration dependency order
+  - financial recovery requires provider reconciliation after payment activation
+  - Storage object bytes require separate backup from DB metadata
+- PR #25 — minimal CI bootstrap directly against `main`
+  - one workflow file only
+  - every pull request + push to main + manual dispatch
+  - npm ci → schema manifest → lint → TypeScript → build
+  - deliberately isolated so CI can be accepted independently from #13
 
 PR #17 contains the current technical Master Context V4. Consolidated owner-only gates are tracked in KÖL issue #16.
 
@@ -105,10 +135,11 @@ Baseline source checks:
 
 - `npm ci`
 - `npm run check:supabase-schema-files`
+- `npm run check:deployment-env`
 - `npm run lint`
 - `npx tsc --noEmit --incremental false`
 - `npm run build`
-- `npm run check:deployment-env` on staging/deployment branches
+- on #24+: `npm run check:release-source`
 
 Database/security work additionally requires:
 
@@ -118,6 +149,8 @@ Database/security work additionally requires:
 - role-by-role RLS test
 - cross-partner isolation test
 - concurrency/idempotency tests for inventory/booking/order writes
+- payment replay/amount/duplicate-settlement tests
+- delivery ownership/state-machine/concurrency tests
 - Storage cross-partner/public-read tests
 - rollback verification
 
@@ -130,7 +163,71 @@ Verified deployment preflight cases on 2026-08-20:
 - production + Supabase public config: PASS
 - public secret-like env name: FAIL as required
 
-Fresh full repo lint/TypeScript/build on the current draft branches is still NOT proven because GitHub Actions has not registered a run and the connected GitHub interface does not expose a repository checkout archive for local execution.
+Fresh full repo lint/TypeScript/build on the current draft branches is still NOT proven. The execution container cannot resolve `github.com`, and GitHub Actions currently has zero workflow runs for the transactional PR heads.
+
+CI root cause verified 2026-08-20:
+
+- `.github/workflows/ci.yml` exists only on the unmerged stabilization/security branch, not `main`;
+- the old draft workflow targeted only pull requests whose base is `main`, so stacked PRs did not match it;
+- PR #25 isolates CI bootstrap directly against `main`; it is NOT merged automatically.
+
+## Vercel preflight
+
+Live connected Vercel account was re-audited 2026-08-20:
+
+- connected team: `ai prof kg` / `ai-prof-kg`;
+- existing projects in that team are Whieda and PALADIN projects;
+- no KÖL / `kol-travel-platform` Vercel project exists;
+- therefore KÖL has no Vercel deployment/env/domain to inspect yet;
+- no project or deployment was created during this audit.
+
+A KÖL Vercel preview/staging should be created only after source CI and the intended staging data-source contract are ready. Production must not be created as the first environment.
+
+## Architecture authority
+
+- Supabase/PostgreSQL is the authoritative transactional data source when live mode is enabled.
+- Availability, inventory, totals, booking/order state and payment truth must be server/database authoritative.
+- Booking/order creation should use narrow transactional RPCs, not direct Data API INSERTs.
+- Audit rows for business mutations should be emitted from the trusted transaction/server path, not accepted from arbitrary clients.
+- Payment callbacks may affect financial truth only after provider-specific signature verification and through an idempotent trusted transaction.
+- Delivery physical progress is a narrow state machine; couriers never own price/payment/order-item truth.
+- AI may interpret intent and call deterministic tools, but may not invent price/availability/discount/payment/booking confirmation.
+- Production must fail closed rather than silently falling back to mock/demo data.
+- Catalog media uses a private Storage design; public catalog media is exposed through policy-checked signed URLs.
+
+## Current staged migration candidate order
+
+After authoritative backup/baseline and only on staging:
+
+1. 005 security hardening
+2. 005a partner scope
+3. 006 policy completion
+4. 006a audit write lockdown
+5. 006b RLS init-plan/scope hardening
+6. 006c transaction entrypoint lockdown
+7. 010 FK index baseline
+8. 007 Stay/Tour booking core
+9. 008 Food/Shop order core
+10. 009 catalog media Storage
+11. 011 payment integrity
+12. 012 delivery lifecycle
+
+Every staged apply must be followed by the corresponding VERIFY file plus relevant role/concurrency tests before the next transactional layer is accepted.
+
+## Current priority sequence
+
+1. Accept CI bootstrap (#25) so future source checks can actually run on GitHub.
+2. Obtain real logical backup/schema dump and accept authoritative migration baseline.
+3. Stage PR #13 security package and prove RBAC/tenant isolation/advisor results.
+4. Stage #21 FK index package after correctness baseline.
+5. Stage #15 Stay/Tour transaction core with initialized inventory and concurrency tests.
+6. Stage #18 Food/Shop transaction core with stock/pricing/idempotency tests.
+7. Stage #19 Storage/media with cross-partner and signed-read tests.
+8. Stage #22 payment integrity only after a provider-specific signature adapter is chosen/testable; no provider activation yet.
+9. Stage #23 delivery lifecycle independently of delivery pricing; fee creation remains blocked until business rule exists.
+10. Use #20/#24 for preview/staging environment, health, correlation and rollback drill.
+11. Reconcile accepted drafts into one tracked forward migration sequence; do not fabricate historical migrations.
+12. Production pilot only after E2E/concurrency/backup-rollback/observability and owner acceptance.
 
 ## Safety / forbidden automatic actions
 
@@ -149,34 +246,11 @@ Without an explicit approved release gate:
 - no assumption that demo/mock data is production data
 - no AI authority over availability, price, payment status or transactional truth
 - no direct client-supplied totals/availability/stock truth
-
-## Architecture authority
-
-- Supabase/PostgreSQL is the authoritative transactional data source when live mode is enabled.
-- Availability, inventory, totals, booking/order state and payment truth must be server/database authoritative.
-- Booking/order creation should use narrow transactional RPCs, not direct Data API INSERTs.
-- Audit rows for business mutations should be emitted from the trusted transaction/server path, not accepted from arbitrary clients.
-- AI may interpret intent and call deterministic tools, but may not invent price/availability/discount/payment/booking confirmation.
-- Production must fail closed rather than silently falling back to mock/demo data.
-- Catalog media uses a private Storage design; public catalog media is exposed through policy-checked signed URLs.
-
-## Current priority sequence
-
-1. Obtain real logical backup/schema dump and accept authoritative migration baseline.
-2. Stage PR #13 security package and prove RBAC/tenant isolation/advisor results.
-3. Stage #21 FK index package after correctness baseline.
-4. Stage #15 Stay/Tour transaction core with initialized inventory and concurrency tests.
-5. Stage #18 Food/Shop transaction core with stock/pricing/idempotency tests.
-6. Stage #19 Storage/media with cross-partner and signed-read tests.
-7. Reconcile drafts into one tracked forward migration sequence; do not fabricate historical migrations.
-8. Use #20 for staging environment/health/preflight; create real Vercel staging only after the source/database gates are ready.
-9. Payment abstraction/provider only after owner decision.
-10. Delivery fee, maps/search, notifications and external integrations.
-11. Production pilot only after E2E/concurrency/backup-rollback/observability and owner acceptance.
+- no blind DB restore after real provider settlements
 
 ## Current production state
 
-- Vercel KÖL project: not deployed in the currently connected AI PROF team as of 2026-08-20.
+- Vercel KÖL project: confirmed absent from the connected AI PROF team as of 2026-08-20.
 - Production URL: not established.
 - Production release status: NOT READY.
 
