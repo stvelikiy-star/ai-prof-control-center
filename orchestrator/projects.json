@@ -308,6 +308,76 @@
         "npm run build"
       ],
       "code_toolchain": "nvm-node"
+    },
+    {
+      "project_id": "resort-os",
+      "path": "/home/agent/projects/resort-os",
+      "enabled": true,
+      "base_branch": "main",
+      "allowed_base_branches": [
+        "main"
+      ],
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "README.md",
+        "docs/**",
+        "src/**",
+        "app/**",
+        "components/**",
+        "lib/**",
+        "public/**",
+        "tests/**",
+        "supabase/**",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "next.config.mjs",
+        "next.config.js",
+        "vite.config.ts",
+        "tailwind.config.ts",
+        "postcss.config.mjs",
+        "middleware.ts",
+        "knowledge/04_CURRENT_STATE.md",
+        "knowledge/05_DECISIONS_AND_BACKLOG.md"
+      ],
+      "forbidden_scope": [
+        ".git/**",
+        ".env",
+        "**/.env",
+        ".env.local",
+        "**/.env.local",
+        "secrets",
+        "credentials",
+        "node_modules/**",
+        ".next/**",
+        "supabase/.temp/**",
+        "recovery-artifacts/**",
+        "knowledge/00_PRODUCT_BIBLE.md",
+        "knowledge/01_DOMAIN_BUSINESS_RULES.md",
+        "knowledge/02_SYSTEM_ARCHITECTURE.md",
+        "knowledge/03_AI_ADMIN.md"
+      ],
+      "agent_context": "agents/resort-os",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20,
+      "code_required_commands": [
+        "git",
+        "python3",
+        "node",
+        "npm",
+        "npx"
+      ],
+      "code_required_checks": [
+        "python3 -m unittest"
+      ],
+      "code_toolchain": "nvm-node"
     }
   ]
 }
