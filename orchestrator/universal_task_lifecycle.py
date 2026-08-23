@@ -1,6 +1,7 @@
-"""Pure shadow model for the universal task lifecycle (Slice 1).
+"""Pure shadow model for the universal task lifecycle (Slices 1 and 3).
 
-This module deliberately has no adapters.  It does not read or write queues,
+This module deliberately has no concrete adapters.  Its Slice 3 protocols are
+data-only least-privilege boundaries.  It does not read or write queues,
 repositories, files, databases, publishers, or runtime state.  Callers may use
 the returned decisions as observations; they must not treat them as authority.
 """
@@ -12,7 +13,7 @@ from enum import Enum
 import hashlib
 import json
 import re
-from typing import Iterable, Mapping, Optional, Sequence, Tuple, Union
+from typing import Iterable, Mapping, Optional, Protocol, Sequence, Tuple, Union, runtime_checkable
 
 
 class LifecycleState(str, Enum):
@@ -48,6 +49,8 @@ class Authority(str, Enum):
 class LifecycleAction(str, Enum):
     VALIDATE = "validate"
     IMPLEMENT = "implement"
+    EXECUTE = "execute"
+    TEST = "test"
     AUDIT = "audit"
     FIX = "fix"
     TERMINATE = "terminate"
@@ -89,6 +92,10 @@ class ReconciliationDecisionType(str, Enum):
 
 class LifecycleDenied(ValueError):
     """Raised when a caller tries to apply a denied shadow transition."""
+
+
+class LifecycleEvidenceDenied(LifecycleDenied):
+    """Raised when stage evidence is absent, stale, out of order, or mismatched."""
 
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
@@ -254,6 +261,231 @@ class ReconciliationDecision:
     decision: ReconciliationDecisionType
     reason: str
     target_state: Optional[LifecycleState] = None
+
+
+class AdapterStage(str, Enum):
+    """The only stages exposed through the Slice 3 least-privilege boundary."""
+
+    EXECUTE = "execute"
+    TEST = "test"
+    AUDIT = "audit"
+
+
+class EvidenceResult(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+
+
+class OrchestrationState(str, Enum):
+    """Shadow-only execution state; it is not a queue or publication state."""
+
+    EXECUTE = "execute"
+    TEST = "test"
+    AUDIT = "audit"
+    FIX_LOOP = "fix_loop"
+    APPROVED = "approved"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class CandidateBinding:
+    """A candidate pinned to its base and exactly one deterministic identity."""
+
+    base_sha: str
+    candidate_sha: Optional[str] = None
+    candidate_digest: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "base_sha", _sha(self.base_sha, "base_sha"))
+        if (self.candidate_sha is None) == (self.candidate_digest is None):
+            raise ValueError(
+                "exactly one of candidate_sha or candidate_digest is required"
+            )
+        if self.candidate_sha is not None:
+            object.__setattr__(
+                self, "candidate_sha", _sha(self.candidate_sha, "candidate_sha")
+            )
+        if self.candidate_digest is not None:
+            object.__setattr__(
+                self,
+                "candidate_digest",
+                _sha(
+                    self.candidate_digest,
+                    "candidate_digest",
+                    sha256_only=True,
+                ),
+            )
+
+    @property
+    def identity(self) -> str:
+        if self.candidate_sha is not None:
+            return f"sha:{self.candidate_sha}"
+        return f"digest:{self.candidate_digest}"
+
+
+@dataclass(frozen=True)
+class StageBinding:
+    """Complete immutable context which every Slice 3 result must repeat."""
+
+    task: TaskIdentity
+    validated_scope_sha256: str
+    candidate: CandidateBinding
+    attempt: int
+    policy_version: str
+    evidence_version: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.task, TaskIdentity):
+            raise ValueError("task must be TaskIdentity")
+        object.__setattr__(
+            self,
+            "validated_scope_sha256",
+            _sha(
+                self.validated_scope_sha256,
+                "validated_scope_sha256",
+                sha256_only=True,
+            ),
+        )
+        if not isinstance(self.candidate, CandidateBinding):
+            raise ValueError("candidate must be CandidateBinding")
+        if (
+            not isinstance(self.attempt, int)
+            or isinstance(self.attempt, bool)
+            or self.attempt < 1
+        ):
+            raise ValueError("attempt must be a positive integer")
+        object.__setattr__(
+            self, "policy_version", _required_text(self.policy_version, "policy_version")
+        )
+        object.__setattr__(
+            self,
+            "evidence_version",
+            _required_text(self.evidence_version, "evidence_version"),
+        )
+
+    def next_attempt(self) -> "StageBinding":
+        return replace(self, attempt=self.attempt + 1)
+
+
+@dataclass(frozen=True)
+class StageEvidence:
+    """Content-addressed PASS/FAIL evidence returned by one external stage."""
+
+    stage: AdapterStage
+    result: EvidenceResult
+    binding: StageBinding
+    evidence_sha256: str
+    failure_fingerprint: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        try:
+            stage = (
+                self.stage
+                if isinstance(self.stage, AdapterStage)
+                else AdapterStage(str(self.stage).strip().lower())
+            )
+            result = (
+                self.result
+                if isinstance(self.result, EvidenceResult)
+                else EvidenceResult(str(self.result).strip().lower())
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unknown stage evidence value") from exc
+        if not isinstance(self.binding, StageBinding):
+            raise ValueError("binding must be StageBinding")
+        object.__setattr__(self, "stage", stage)
+        object.__setattr__(self, "result", result)
+        object.__setattr__(
+            self,
+            "evidence_sha256",
+            _sha(self.evidence_sha256, "evidence_sha256", sha256_only=True),
+        )
+        if self.failure_fingerprint is not None:
+            object.__setattr__(
+                self,
+                "failure_fingerprint",
+                _required_text(self.failure_fingerprint, "failure_fingerprint"),
+            )
+        if result is EvidenceResult.PASS and self.failure_fingerprint is not None:
+            raise ValueError("PASS evidence cannot contain a failure fingerprint")
+        if result is EvidenceResult.FAIL and self.failure_fingerprint is None:
+            raise ValueError("FAIL evidence requires a failure fingerprint")
+
+    @property
+    def fingerprint(self) -> str:
+        return self.failure_fingerprint or self.evidence_sha256
+
+
+@dataclass(frozen=True)
+class StageRequest:
+    """Data-only request: no path, command, credential, or mutation callback."""
+
+    binding: StageBinding
+    prior_evidence: Tuple[StageEvidence, ...] = ()
+    repair: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.binding, StageBinding):
+            raise ValueError("binding must be StageBinding")
+        evidence = tuple(self.prior_evidence)
+        if any(not isinstance(item, StageEvidence) for item in evidence):
+            raise ValueError("prior_evidence must contain StageEvidence values")
+        object.__setattr__(self, "prior_evidence", evidence)
+        if not isinstance(self.repair, bool):
+            raise ValueError("repair must be a boolean")
+
+
+@runtime_checkable
+class ExecuteLifecycleAdapter(Protocol):
+    def execute(self, request: StageRequest) -> StageEvidence: ...
+
+
+@runtime_checkable
+class TestLifecycleAdapter(Protocol):
+    def test(self, request: StageRequest) -> StageEvidence: ...
+
+
+@runtime_checkable
+class AuditLifecycleAdapter(Protocol):
+    def audit(self, request: StageRequest) -> StageEvidence: ...
+
+
+@runtime_checkable
+class LifecycleStageAdapter(
+    ExecuteLifecycleAdapter, TestLifecycleAdapter, AuditLifecycleAdapter, Protocol
+):
+    """Aggregate opt-in boundary around existing isolated stage runners."""
+
+
+@dataclass(frozen=True)
+class OrchestrationSnapshot:
+    """Immutable, non-authoritative state for one task and candidate lifecycle."""
+
+    binding: StageBinding
+    state: OrchestrationState
+    budget: FixLoopBudget
+    evidence: Tuple[StageEvidence, ...] = ()
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.binding, StageBinding):
+            raise ValueError("binding must be StageBinding")
+        try:
+            state = (
+                self.state
+                if isinstance(self.state, OrchestrationState)
+                else OrchestrationState(str(self.state).strip().lower())
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unknown orchestration state") from exc
+        if not isinstance(self.budget, FixLoopBudget):
+            raise ValueError("budget must be FixLoopBudget")
+        evidence = tuple(self.evidence)
+        if any(not isinstance(item, StageEvidence) for item in evidence):
+            raise ValueError("evidence must contain StageEvidence values")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "evidence", evidence)
+        object.__setattr__(self, "reason", str(self.reason))
 
 
 _AUTHORITY_RANK = {
@@ -625,6 +857,187 @@ def decide_retry(
     return RetryDecision(classification, True, "retry allowed within finite budget", next_budget)
 
 
+def start_orchestration(
+    binding: StageBinding, budget: FixLoopBudget
+) -> OrchestrationSnapshot:
+    """Create an EXECUTE shadow without invoking an adapter or changing runtime."""
+
+    if not isinstance(binding, StageBinding):
+        raise ValueError("binding must be StageBinding")
+    if not isinstance(budget, FixLoopBudget):
+        raise ValueError("budget must be FixLoopBudget")
+    return OrchestrationSnapshot(binding, OrchestrationState.EXECUTE, budget)
+
+
+def _same_lifecycle(left: StageBinding, right: StageBinding) -> bool:
+    """Compare the fields a repair is never permitted to replace."""
+
+    return (
+        left.task == right.task
+        and left.validated_scope_sha256 == right.validated_scope_sha256
+        and left.candidate.base_sha == right.candidate.base_sha
+        and left.policy_version == right.policy_version
+        and left.evidence_version == right.evidence_version
+    )
+
+
+def _matching_pass(
+    evidence: Sequence[StageEvidence],
+    stage: AdapterStage,
+    binding: StageBinding,
+) -> bool:
+    return any(
+        item.stage is stage
+        and item.result is EvidenceResult.PASS
+        and item.binding == binding
+        for item in evidence
+    )
+
+
+def validate_stage_evidence(
+    snapshot: OrchestrationSnapshot,
+    evidence: StageEvidence,
+) -> None:
+    """Reject missing, stale, cross-task, mismatched, and out-of-order evidence."""
+
+    if not isinstance(snapshot, OrchestrationSnapshot):
+        raise LifecycleEvidenceDenied("missing orchestration snapshot")
+    if not isinstance(evidence, StageEvidence):
+        raise LifecycleEvidenceDenied("missing or invalid stage evidence")
+    if snapshot.state in (OrchestrationState.APPROVED, OrchestrationState.FAILED):
+        raise LifecycleEvidenceDenied("orchestration is already terminal")
+
+    expected_stage = {
+        OrchestrationState.EXECUTE: AdapterStage.EXECUTE,
+        OrchestrationState.TEST: AdapterStage.TEST,
+        OrchestrationState.AUDIT: AdapterStage.AUDIT,
+        OrchestrationState.FIX_LOOP: AdapterStage.EXECUTE,
+    }.get(snapshot.state)
+    if evidence.stage is not expected_stage:
+        raise LifecycleEvidenceDenied(
+            f"out-of-order evidence: expected {expected_stage.value if expected_stage else 'none'}"
+        )
+
+    if snapshot.state is OrchestrationState.FIX_LOOP:
+        if not _same_lifecycle(evidence.binding, snapshot.binding):
+            raise LifecycleEvidenceDenied(
+                "repair evidence changed task, scope, base, policy, or evidence version"
+            )
+        if evidence.binding.attempt != snapshot.binding.attempt + 1:
+            raise LifecycleEvidenceDenied("repair evidence has stale or wrong attempt")
+    elif evidence.binding != snapshot.binding:
+        raise LifecycleEvidenceDenied(
+            "evidence task, scope, candidate, attempt, policy, or version mismatch"
+        )
+
+    if any(
+        item.evidence_sha256 == evidence.evidence_sha256
+        for item in snapshot.evidence
+    ):
+        raise LifecycleEvidenceDenied("stage evidence is stale or replayed")
+
+    if evidence.stage is AdapterStage.TEST and not _matching_pass(
+        snapshot.evidence, AdapterStage.EXECUTE, evidence.binding
+    ):
+        raise LifecycleEvidenceDenied("TEST evidence lacks matching EXECUTE PASS")
+    if evidence.stage is AdapterStage.AUDIT and not _matching_pass(
+        snapshot.evidence, AdapterStage.TEST, evidence.binding
+    ):
+        raise LifecycleEvidenceDenied("AUDIT evidence lacks matching TEST PASS")
+
+
+def apply_stage_evidence(
+    snapshot: OrchestrationSnapshot,
+    evidence: StageEvidence,
+) -> OrchestrationSnapshot:
+    """Apply one validated Slice 3 result and return a new shadow snapshot."""
+
+    validate_stage_evidence(snapshot, evidence)
+    collected = snapshot.evidence + (evidence,)
+
+    if evidence.stage is AdapterStage.EXECUTE:
+        if evidence.result is EvidenceResult.FAIL:
+            return replace(
+                snapshot,
+                binding=evidence.binding,
+                state=OrchestrationState.FAILED,
+                evidence=collected,
+                reason="EXECUTE adapter reported failure",
+            )
+        return replace(
+            snapshot,
+            binding=evidence.binding,
+            state=OrchestrationState.TEST,
+            evidence=collected,
+            reason="matching EXECUTE PASS accepted",
+        )
+
+    if evidence.stage is AdapterStage.TEST:
+        if evidence.result is EvidenceResult.PASS:
+            return replace(
+                snapshot,
+                state=OrchestrationState.AUDIT,
+                evidence=collected,
+                reason="matching TEST PASS accepted",
+            )
+        retry = decide_retry(
+            FailureKind.CHECK_FAILED,
+            snapshot.budget,
+            failure_fingerprint=evidence.fingerprint,
+        )
+        return replace(
+            snapshot,
+            state=(
+                OrchestrationState.FIX_LOOP
+                if retry.should_retry
+                else OrchestrationState.FAILED
+            ),
+            budget=retry.budget,
+            evidence=collected,
+            reason=retry.reason,
+        )
+
+    # AUDIT can reach APPROVED only after validate_stage_evidence found an
+    # exact TEST PASS for this task/candidate/attempt/policy context.
+    if evidence.result is EvidenceResult.PASS:
+        return replace(
+            snapshot,
+            state=OrchestrationState.APPROVED,
+            evidence=collected,
+            reason="matching TEST PASS and Stage 01C PASS accepted",
+        )
+    retry = decide_retry(
+        FailureKind.AUDIT_REJECTED,
+        snapshot.budget,
+        failure_fingerprint=evidence.fingerprint,
+    )
+    return replace(
+        snapshot,
+        state=(
+            OrchestrationState.FIX_LOOP
+            if retry.should_retry
+            else OrchestrationState.FAILED
+        ),
+        budget=retry.budget,
+        evidence=collected,
+        reason=retry.reason,
+    )
+
+
+def fail_orchestration(
+    snapshot: OrchestrationSnapshot, reason: str
+) -> OrchestrationSnapshot:
+    """Fail closed on an adapter exception or invalid adapter return."""
+
+    if not isinstance(snapshot, OrchestrationSnapshot):
+        raise ValueError("snapshot must be OrchestrationSnapshot")
+    return replace(
+        snapshot,
+        state=OrchestrationState.FAILED,
+        reason=_required_text(reason, "reason"),
+    )
+
+
 def reconcile(
     shadow: LifecycleSnapshot,
     observed: LifecycleSnapshot,
@@ -737,29 +1150,46 @@ def reconcile(
 
 
 __all__ = [
+    "AdapterStage",
+    "AuditLifecycleAdapter",
     "Authority",
     "AuthorityBinding",
+    "CandidateBinding",
     "EvidenceBinding",
+    "EvidenceResult",
+    "ExecuteLifecycleAdapter",
     "FailureKind",
     "FixLoopBudget",
     "LifecycleAction",
     "LifecycleDenied",
+    "LifecycleEvidenceDenied",
     "LifecycleSnapshot",
+    "LifecycleStageAdapter",
     "LifecycleState",
+    "OrchestrationSnapshot",
+    "OrchestrationState",
     "ReconciliationDecision",
     "ReconciliationDecisionType",
     "RetryClass",
     "RetryDecision",
+    "StageBinding",
+    "StageEvidence",
+    "StageRequest",
     "TaskIdentity",
     "TerminalOutcome",
+    "TestLifecycleAdapter",
     "TransitionDecision",
     "apply_transition",
+    "apply_stage_evidence",
     "authority_for",
     "build_idempotency_key",
     "classify_retry",
     "decide_retry",
     "evaluate_transition",
+    "fail_orchestration",
     "intersect_authorities",
     "legal_transitions",
     "reconcile",
+    "start_orchestration",
+    "validate_stage_evidence",
 ]

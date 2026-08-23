@@ -10,8 +10,12 @@ import unittest
 from pathlib import Path
 
 from orchestrator.universal_task_lifecycle import (
+    AuditLifecycleAdapter,
     Authority,
+    ExecuteLifecycleAdapter,
     LifecycleAction,
+    StageRequest,
+    TestLifecycleAdapter,
     intersect_authorities,
 )
 from orchestrator.universal_task_lifecycle_store import InMemoryLifecycleStore
@@ -112,6 +116,34 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         self.assertNotIn("allow_push", service_source)
         self.assertNotIn("allow_merge", service_source)
         self.assertNotIn("allow_deployment", service_source)
+
+    def test_slice3_contracts_expose_evidence_only_not_mutation_authority(self):
+        self.assertTrue(hasattr(ExecuteLifecycleAdapter, "execute"))
+        self.assertTrue(hasattr(TestLifecycleAdapter, "test"))
+        self.assertTrue(hasattr(AuditLifecycleAdapter, "audit"))
+        request_fields = set(StageRequest.__dataclass_fields__)
+        self.assertEqual(request_fields, {"binding", "prior_evidence", "repair"})
+        for forbidden in (
+            "command",
+            "shell",
+            "github",
+            "publish",
+            "commit",
+            "push",
+            "merge",
+            "deploy",
+            "queue",
+            "database",
+            "secret",
+            "systemd",
+        ):
+            self.assertNotIn(forbidden, request_fields)
+
+        public_store_api = {
+            name for name in dir(InMemoryLifecycleStore) if not name.startswith("_")
+        }
+        self.assertIn("stage_evidence", public_store_api)
+        self.assertNotIn("mutate_queue", public_store_api)
 
     def test_core_authority_files_are_not_autonomous_scope(self):
         allowed = self.project["allowed_scope"]
