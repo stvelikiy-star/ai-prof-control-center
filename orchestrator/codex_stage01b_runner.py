@@ -208,6 +208,7 @@ def build_codex_environment(workspace: Path) -> dict[str, str]:
     env["GIT_WORK_TREE"] = str(workspace)
     env["GIT_CEILING_DIRECTORIES"] = str(workspace.parent)
     env["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "0"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
