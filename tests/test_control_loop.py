@@ -9,6 +9,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from orchestrator.universal_task_lifecycle import (
+    Authority,
+    AuthorityBinding,
+    EvidenceBinding,
+    LifecycleAction,
+    LifecycleSnapshot,
+    LifecycleState,
+    TaskIdentity,
+    apply_transition,
+)
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "orchestrator" / "control_loop.py"
 SPEC = importlib.util.spec_from_file_location("ai_prof_control_loop", MODULE_PATH)
@@ -56,6 +67,49 @@ class ControlLoopTests(unittest.TestCase):
             with mock.patch.object(loop, "run_child", side_effect=[1, 1, 1, 1, 0]) as run:
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
             self.assertEqual(run.call_count, 5)
+
+    def test_slice1_does_not_add_publisher_pr_or_merge_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = loop.build_paths(Path(tmp))
+            stages = []
+
+            def fake_run(_paths, stage, _argv, _timeout):
+                stages.append(stage)
+                return 0
+
+            with mock.patch.object(loop, "run_child", side_effect=fake_run):
+                self.assertEqual(loop.run_cycle(paths, 1), 0)
+            self.assertEqual(
+                stages,
+                ["operations", "stage_01a", "auto_repair", "codex_stage_01b", "codex"],
+            )
+            self.assertTrue({"publish", "publisher", "pr", "merge"}.isdisjoint(stages))
+
+    def test_slice1_shadow_transition_has_no_lifecycle_side_effect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = TaskIdentity(
+                "TASK-SHADOW",
+                "ai-prof-control-center",
+                "a" * 64,
+                "b" * 40,
+            )
+            snapshot = LifecycleSnapshot(
+                identity=identity,
+                authority=(
+                    AuthorityBinding(LifecycleAction.VALIDATE, Authority.AUTONOMOUS),
+                ),
+            )
+            before = tuple(root.rglob("*"))
+            advanced = apply_transition(
+                snapshot,
+                LifecycleState.REVIEW,
+                evidence=(EvidenceBinding("task_validated", "c" * 64, identity.task_id),),
+                expected_identity=identity,
+            )
+            self.assertEqual(advanced.state, LifecycleState.REVIEW)
+            self.assertEqual(snapshot.state, LifecycleState.PENDING)
+            self.assertEqual(tuple(root.rglob("*")), before)
 
     def test_child_timeout_and_redacted_log(self):
         with tempfile.TemporaryDirectory() as tmp:

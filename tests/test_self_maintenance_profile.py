@@ -9,6 +9,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from orchestrator.universal_task_lifecycle import (
+    Authority,
+    LifecycleAction,
+    intersect_authorities,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = ROOT / "orchestrator" / "projects.json"
 CONTEXT = ROOT / "agents" / "ai-prof-control-center"
@@ -47,6 +53,30 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         self.assertEqual(self.project["allowed_base_branches"], ["maintenance/base"])
         for key in ("allow_commits", "allow_push", "allow_merge", "allow_deployment"):
             self.assertIs(self.project[key], False)
+
+    def test_lifecycle_cannot_grant_publish_pr_or_merge_authority(self):
+        for key in ("allow_commits", "allow_push", "allow_merge"):
+            self.assertIs(self.project[key], False)
+
+        declared = self.project.get("lifecycle_authority", {})
+        self.assertIsInstance(declared, dict)
+        capability_gate = {
+            LifecycleAction.PUBLISH: self.project["allow_commits"]
+            and self.project["allow_push"],
+            LifecycleAction.PR: self.project["allow_push"],
+            LifecycleAction.MERGE: self.project["allow_merge"],
+        }
+        for action, enabled in capability_gate.items():
+            configured = declared.get(action.value, Authority.DENIED)
+            self.assertIn(
+                intersect_authorities(configured, Authority.AUTONOMOUS),
+                (Authority.DENIED, Authority.OWNER_ONLY),
+            )
+            effective = intersect_authorities(
+                configured,
+                Authority.AUTONOMOUS if enabled else Authority.DENIED,
+            )
+            self.assertEqual(effective, Authority.DENIED, action.value)
 
     def test_core_authority_files_are_not_autonomous_scope(self):
         allowed = self.project["allowed_scope"]
