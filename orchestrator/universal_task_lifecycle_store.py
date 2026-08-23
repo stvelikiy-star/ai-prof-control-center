@@ -19,6 +19,11 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Callable, Generic, Mapping, Protocol, TypeVar, runtime_checkable
 
+try:
+    from orchestrator.universal_task_lifecycle import StageEvidence
+except ImportError:  # pragma: no cover - direct service-script import form
+    from universal_task_lifecycle import StageEvidence  # type: ignore[no-redef]
+
 
 class LifecycleStoreError(RuntimeError):
     """Base class for fail-closed lifecycle persistence errors."""
@@ -84,6 +89,17 @@ class LedgerEntry:
 
 
 @dataclass(frozen=True)
+class StageEvidenceRecord:
+    """Append-only Slice 3 evidence pinned to a lifecycle store version."""
+
+    evidence_key: str
+    task_key: str
+    lifecycle_version: int
+    evidence: object
+    recorded_at: int
+
+
+@dataclass(frozen=True)
 class ProjectionIntent:
     intent_key: str
     task_key: str
@@ -134,6 +150,14 @@ class LifecycleTransaction(Protocol):
         action: str,
         payload: Mapping[str, object] | None = None,
     ) -> LedgerEntry: ...
+
+    def append_stage_evidence(
+        self,
+        evidence_key: str,
+        task_key: str,
+        lifecycle_version: int,
+        evidence: object,
+    ) -> StageEvidenceRecord: ...
 
     def enqueue_projection(
         self,
@@ -243,6 +267,7 @@ class InMemoryLifecycleStore:
         self._leases: dict[str, Lease] = {}
         self._inbox: dict[tuple[str, str], InboxEvent] = {}
         self._ledger: dict[str, LedgerEntry] = {}
+        self._stage_evidence: dict[str, StageEvidenceRecord] = {}
         self._outbox: dict[str, ProjectionIntent] = {}
         self._acks: dict[str, ProjectionAcknowledgement] = {}
         self._lease_sequence = 0
@@ -286,6 +311,13 @@ class InMemoryLifecycleStore:
         with self._lock:
             return tuple(copy.deepcopy(self._ledger[key]) for key in sorted(self._ledger))
 
+    def stage_evidence(self) -> tuple[StageEvidenceRecord, ...]:
+        with self._lock:
+            return tuple(
+                copy.deepcopy(self._stage_evidence[key])
+                for key in sorted(self._stage_evidence)
+            )
+
     def projection_intents(self) -> tuple[ProjectionIntent, ...]:
         with self._lock:
             return tuple(copy.deepcopy(self._outbox[key]) for key in sorted(self._outbox))
@@ -312,6 +344,7 @@ class InMemoryLifecycleTransaction(AbstractContextManager["InMemoryLifecycleTran
         self._leases = copy.deepcopy(self._store._leases)
         self._inbox = copy.deepcopy(self._store._inbox)
         self._ledger = copy.deepcopy(self._store._ledger)
+        self._stage_evidence = copy.deepcopy(self._store._stage_evidence)
         self._outbox = copy.deepcopy(self._store._outbox)
         self._acks = copy.deepcopy(self._store._acks)
         self._lease_sequence = self._store._lease_sequence
@@ -324,6 +357,7 @@ class InMemoryLifecycleTransaction(AbstractContextManager["InMemoryLifecycleTran
                 self._store._leases = self._leases
                 self._store._inbox = self._inbox
                 self._store._ledger = self._ledger
+                self._store._stage_evidence = self._stage_evidence
                 self._store._outbox = self._outbox
                 self._store._acks = self._acks
                 self._store._lease_sequence = self._lease_sequence
@@ -537,6 +571,67 @@ class InMemoryLifecycleTransaction(AbstractContextManager["InMemoryLifecycleTran
         )
         self._ledger[entry_key] = entry
         return copy.deepcopy(entry)
+
+    @_transaction_operation
+    def append_stage_evidence(
+        self,
+        evidence_key: str,
+        task_key: str,
+        lifecycle_version: int,
+        evidence: object,
+    ) -> StageEvidenceRecord:
+        """Append exact stage evidence, rejecting cross-task or stale records."""
+
+        self._ensure_active()
+        _require_text(evidence_key, "evidence_key")
+        _require_text(task_key, "task_key")
+        if (
+            isinstance(lifecycle_version, bool)
+            or not isinstance(lifecycle_version, int)
+            or lifecycle_version < 0
+        ):
+            raise ValueError("lifecycle_version must be a non-negative integer")
+        if not isinstance(evidence, StageEvidence):
+            raise ValueError("evidence must be StageEvidence")
+        current = self._stage_evidence.get(evidence_key)
+        if current is not None:
+            if (
+                current.task_key,
+                current.lifecycle_version,
+                current.evidence,
+            ) != (task_key, lifecycle_version, evidence):
+                self._fail(
+                    DeduplicationConflict("stage evidence key content is immutable")
+                )
+            return copy.deepcopy(current)
+
+        self._require_current_version(task_key, lifecycle_version)
+        lifecycle = self._lifecycles[task_key]
+        binding = getattr(evidence, "binding", None)
+        evidence_identity = getattr(binding, "task", None)
+        if binding is None or evidence_identity is None:
+            self._fail(LifecycleIdentityMismatch("stage evidence lacks task binding"))
+        if evidence_identity != lifecycle.identity:
+            self._fail(
+                LifecycleIdentityMismatch(
+                    "stage evidence identity does not match lifecycle identity"
+                )
+            )
+        if getattr(evidence_identity, "task_id", None) != task_key:
+            self._fail(
+                LifecycleIdentityMismatch(
+                    "stage evidence task_id does not match lifecycle key"
+                )
+            )
+        record = StageEvidenceRecord(
+            evidence_key,
+            task_key,
+            lifecycle_version,
+            copy.deepcopy(evidence),
+            self._now(),
+        )
+        self._stage_evidence[evidence_key] = record
+        return copy.deepcopy(record)
 
     @_transaction_operation
     def enqueue_projection(

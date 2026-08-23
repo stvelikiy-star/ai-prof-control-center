@@ -23,6 +23,33 @@ from typing import Mapping, Protocol
 
 import control_loop
 
+try:  # Package import in tests; direct import when run as a service script.
+    from orchestrator.universal_task_lifecycle import (
+        AdapterStage,
+        FixLoopBudget,
+        LifecycleStageAdapter,
+        OrchestrationSnapshot,
+        OrchestrationState,
+        StageBinding,
+        StageRequest,
+        apply_stage_evidence,
+        fail_orchestration,
+        start_orchestration,
+    )
+except ImportError:  # pragma: no cover - exercised by the deployed script form
+    from universal_task_lifecycle import (  # type: ignore[no-redef]
+        AdapterStage,
+        FixLoopBudget,
+        LifecycleStageAdapter,
+        OrchestrationSnapshot,
+        OrchestrationState,
+        StageBinding,
+        StageRequest,
+        apply_stage_evidence,
+        fail_orchestration,
+        start_orchestration,
+    )
+
 _ORIGINAL_CHILD_COMMANDS = control_loop.child_commands
 
 
@@ -41,6 +68,59 @@ class LifecycleShadowObserver(Protocol):
     """Observation-only boundary; its return value can never grant authority."""
 
     def observe(self, observation: ControlShadowObservation) -> object: ...
+
+
+def run_lifecycle_shadow(
+    binding: StageBinding,
+    budget: FixLoopBudget,
+    adapter: LifecycleStageAdapter,
+) -> OrchestrationSnapshot:
+    """Run injected EXECUTE/TEST/AUDIT adapters as a finite shadow lifecycle.
+
+    Requests contain immutable identity data and prior evidence only.  This
+    service supplies no commands, paths, queue handles, publication callbacks,
+    or repository capability.  Adapter errors and malformed evidence terminate
+    the shadow fail-closed and never change the normal control-loop result.
+    """
+
+    snapshot = start_orchestration(binding, budget)
+    # Each fix consumes budget before returning to EXECUTE.  The additional
+    # constant covers the initial EXECUTE/TEST/AUDIT sequence.
+    maximum_stage_calls = 3 * (budget.max_fix_attempts + 1)
+    stage_calls = 0
+    while snapshot.state not in (
+        OrchestrationState.APPROVED,
+        OrchestrationState.FAILED,
+    ):
+        stage_calls += 1
+        if stage_calls > maximum_stage_calls:
+            return fail_orchestration(snapshot, "finite orchestration bound reached")
+
+        if snapshot.state is OrchestrationState.FIX_LOOP:
+            request_binding = snapshot.binding.next_attempt()
+            stage = AdapterStage.EXECUTE
+            repair = True
+        else:
+            request_binding = snapshot.binding
+            stage = AdapterStage(snapshot.state.value)
+            repair = False
+        request = StageRequest(request_binding, snapshot.evidence, repair)
+
+        try:
+            if stage is AdapterStage.EXECUTE:
+                returned = adapter.execute(request)
+            elif stage is AdapterStage.TEST:
+                returned = adapter.test(request)
+            else:
+                returned = adapter.audit(request)
+            snapshot = apply_stage_evidence(snapshot, returned)
+        except Exception:
+            # Exception text may contain paths, task prose, or runner output;
+            # retain only the bounded stage classification in shadow evidence.
+            return fail_orchestration(
+                snapshot, f"{stage.value.upper()} adapter exception or invalid evidence"
+            )
+    return snapshot
 
 
 def _text_or_none(value: object) -> str | None:
@@ -179,7 +259,25 @@ def _commands_with_publishers(
     ]
 
 
-def main(*, shadow_observer: LifecycleShadowObserver | None = None) -> int:
+def main(
+    *,
+    shadow_observer: LifecycleShadowObserver | None = None,
+    lifecycle_adapter: LifecycleStageAdapter | None = None,
+    lifecycle_binding: StageBinding | None = None,
+    lifecycle_budget: FixLoopBudget | None = None,
+) -> int:
+    # Slice 3 is deliberately opt-in.  A partially supplied injection is a
+    # shadow no-op and cannot affect normal runtime setup, ordering, or result.
+    if (
+        lifecycle_adapter is not None
+        and lifecycle_binding is not None
+        and lifecycle_budget is not None
+    ):
+        run_lifecycle_shadow(
+            lifecycle_binding,
+            lifecycle_budget,
+            lifecycle_adapter,
+        )
     if shadow_observer is None:
         # Preserve the dedicated-service runtime identity on the normal path.
         # Shadow observation is strictly opt-in and must not replace the

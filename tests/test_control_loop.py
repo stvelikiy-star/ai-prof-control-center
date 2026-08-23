@@ -12,12 +12,19 @@ from types import SimpleNamespace
 from unittest import mock
 
 from orchestrator.universal_task_lifecycle import (
+    AdapterStage,
     Authority,
     AuthorityBinding,
+    CandidateBinding,
     EvidenceBinding,
+    EvidenceResult,
+    FixLoopBudget,
     LifecycleAction,
     LifecycleSnapshot,
     LifecycleState,
+    OrchestrationState,
+    StageBinding,
+    StageEvidence,
     TaskIdentity,
     apply_transition,
 )
@@ -50,6 +57,22 @@ with mock.patch.dict(sys.modules, {"control_loop": loop}):
 
 
 class ControlLoopTests(unittest.TestCase):
+    @staticmethod
+    def _slice3_binding() -> StageBinding:
+        return StageBinding(
+            TaskIdentity(
+                "TASK-SLICE3",
+                "ai-prof-control-center",
+                "a" * 64,
+                "b" * 40,
+            ),
+            "c" * 64,
+            CandidateBinding(base_sha="d" * 40, candidate_digest="e" * 64),
+            1,
+            "policy-v1",
+            "evidence-v1",
+        )
+
     def test_fixed_stage_order_and_one_child_at_a_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = loop.build_paths(Path(tmp))
@@ -329,6 +352,94 @@ class ControlLoopTests(unittest.TestCase):
                     "kol_approved_publisher_post",
                     "ak_bermet_approved_publisher_post",
                 ],
+            )
+
+    def test_slice3_opt_in_adapters_run_in_exact_order_and_approve(self):
+        binding = self._slice3_binding()
+
+        class Adapter:
+            def __init__(self):
+                self.calls = []
+
+            def _pass(self, stage, request, character):
+                self.calls.append((stage, request.binding, request.repair))
+                return StageEvidence(
+                    stage,
+                    EvidenceResult.PASS,
+                    request.binding,
+                    character * 64,
+                )
+
+            def execute(self, request):
+                return self._pass(AdapterStage.EXECUTE, request, "1")
+
+            def test(self, request):
+                return self._pass(AdapterStage.TEST, request, "2")
+
+            def audit(self, request):
+                return self._pass(AdapterStage.AUDIT, request, "3")
+
+        adapter = Adapter()
+        result = service.run_lifecycle_shadow(
+            binding,
+            FixLoopBudget(max_fix_attempts=2, max_repeated_failures=2),
+            adapter,
+        )
+        self.assertEqual(result.state, OrchestrationState.APPROVED)
+        self.assertEqual(
+            [stage for stage, _binding, _repair in adapter.calls],
+            list(AdapterStage),
+        )
+        self.assertTrue(all(item[1] == binding for item in adapter.calls))
+        self.assertTrue(all(not item[2] for item in adapter.calls))
+
+    def test_slice3_adapter_exception_and_malformed_result_fail_closed(self):
+        binding = self._slice3_binding()
+        budget = FixLoopBudget(max_fix_attempts=1, max_repeated_failures=2)
+
+        class BrokenAdapter:
+            def execute(self, _request):
+                raise RuntimeError("untrusted runner detail")
+
+            def test(self, _request):
+                raise AssertionError("must not run")
+
+            def audit(self, _request):
+                raise AssertionError("must not run")
+
+        broken = service.run_lifecycle_shadow(binding, budget, BrokenAdapter())
+        self.assertEqual(broken.state, OrchestrationState.FAILED)
+        self.assertNotIn("untrusted runner detail", broken.reason)
+
+        class MalformedAdapter(BrokenAdapter):
+            def execute(self, _request):
+                return None
+
+        malformed = service.run_lifecycle_shadow(binding, budget, MalformedAdapter())
+        self.assertEqual(malformed.state, OrchestrationState.FAILED)
+        self.assertIn("invalid evidence", malformed.reason)
+
+    def test_slice3_disabled_shadow_is_a_strict_no_op(self):
+        original_bridge = service.control_loop.supervise_telegram_bridge
+        original_commands = service.control_loop.child_commands
+
+        class MustNotRun:
+            def execute(self, _request):
+                raise AssertionError("disabled lifecycle adapter ran")
+
+            test = execute
+            audit = execute
+
+        with mock.patch.object(
+            service.control_loop, "supervise_telegram_bridge", original_bridge
+        ), mock.patch.object(
+            service.control_loop, "child_commands", original_commands
+        ), mock.patch.object(service.control_loop, "main", return_value=17) as main:
+            self.assertEqual(service.main(lifecycle_adapter=MustNotRun()), 17)
+            main.assert_called_once_with()
+            self.assertIs(
+                service.control_loop.supervise_telegram_bridge,
+                service._dedicated_telegram_service_only,
             )
 
     def test_child_timeout_and_redacted_log(self):
