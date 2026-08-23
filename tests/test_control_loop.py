@@ -303,6 +303,10 @@ class ControlLoopTests(unittest.TestCase):
                 service.control_loop.supervise_telegram_bridge,
                 service._dedicated_telegram_service_only,
             )
+            self.assertIs(
+                service.control_loop.child_commands,
+                service._commands_with_ai_prof_publisher_gate,
+            )
 
             class Observer:
                 def observe(self, _observation):
@@ -312,6 +316,10 @@ class ControlLoopTests(unittest.TestCase):
             self.assertIsNot(
                 service.control_loop.supervise_telegram_bridge,
                 service._dedicated_telegram_service_only,
+            )
+            self.assertIs(
+                service.control_loop.child_commands,
+                service._commands_with_ai_prof_publisher_gate,
             )
 
     def test_slice2_shadow_fails_closed_on_symlinked_state(self):
@@ -331,27 +339,63 @@ class ControlLoopTests(unittest.TestCase):
             self.assertFalse(service._observe_lifecycle_shadow(paths, observer))
             self.assertFalse(observer.called)
 
-    def test_slice2_adds_no_ai_prof_publisher_route(self):
+    def test_slice4_adds_explicit_ai_prof_denial_route_without_reordering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = root / "runtime"
+            normal = [
+                ("operations", ["operations"]),
+                (
+                    "codex_stage_01b",
+                    [str(root / "orchestrator/codex_stage01b_runner.py")],
+                ),
+                ("codex", ["codex"]),
+            ]
             with mock.patch.object(
-                service, "_ORIGINAL_CHILD_COMMANDS", return_value=[]
+                service, "_ORIGINAL_CHILD_COMMANDS", return_value=normal
             ):
-                stages = [
-                    stage
-                    for stage, _argv in service._commands_with_publishers(root, runtime)
-                ]
-            self.assertNotIn("ai_prof_publisher", stages)
-            self.assertNotIn("ai_prof_approved_publisher", stages)
+                legacy_commands = service._commands_with_publishers(root, runtime)
+                commands = service._commands_with_ai_prof_publisher_gate(root, runtime)
+            self.assertEqual(
+                [stage for stage, _argv in legacy_commands],
+                [
+                    "kol_approved_publisher_pre",
+                    "ak_bermet_approved_publisher_pre",
+                    "operations",
+                    "codex_stage_01b",
+                    "codex",
+                    "kol_approved_publisher_post",
+                    "ak_bermet_approved_publisher_post",
+                ],
+            )
+            stages = [stage for stage, _argv in commands]
             self.assertEqual(
                 stages,
                 [
                     "kol_approved_publisher_pre",
                     "ak_bermet_approved_publisher_pre",
+                    "ai_prof_approved_publisher_pre",
+                    "operations",
+                    "codex_stage_01b",
+                    "codex",
                     "kol_approved_publisher_post",
                     "ak_bermet_approved_publisher_post",
+                    "ai_prof_approved_publisher_post",
                 ],
+            )
+            expected_gate = str(
+                root / "orchestrator/ai_prof_approved_task_publisher_gate.py"
+            )
+            ai_prof_commands = [
+                argv for stage, argv in commands if stage.startswith("ai_prof_")
+            ]
+            self.assertEqual(len(ai_prof_commands), 2)
+            for argv in ai_prof_commands:
+                self.assertIn(expected_gate, argv)
+                self.assertEqual(argv[-1], "--once")
+            self.assertEqual(
+                dict(commands)["codex_stage_01b"],
+                [str(root / "orchestrator/codex_stage01b_runner_v2.py")],
             )
 
     def test_slice3_opt_in_adapters_run_in_exact_order_and_approve(self):

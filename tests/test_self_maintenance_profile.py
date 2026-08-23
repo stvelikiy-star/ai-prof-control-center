@@ -83,7 +83,7 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
             )
             self.assertEqual(effective, Authority.DENIED, action.value)
 
-    def test_slice2_store_exposes_no_release_or_production_capability(self):
+    def test_slice4_route_does_not_broaden_release_or_production_capability(self):
         public_store_api = {
             name for name in dir(InMemoryLifecycleStore) if not name.startswith("_")
         }
@@ -111,11 +111,22 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         service_source = (
             ROOT / "orchestrator" / "control_loop_service.py"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("ai_prof_approved_task_publisher", service_source)
+        self.assertIn("ai_prof_approved_task_publisher_gate.py", service_source)
         self.assertNotIn("allow_commits", service_source)
         self.assertNotIn("allow_push", service_source)
         self.assertNotIn("allow_merge", service_source)
         self.assertNotIn("allow_deployment", service_source)
+
+        gate_source = (
+            ROOT / "orchestrator" / "ai_prof_approved_task_publisher_gate.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "/home/agent/projects/ai-prof-control-center-maintenance", gate_source
+        )
+        self.assertIn("OWNER_ACTION_REQUIRED", gate_source)
+        self.assertNotIn("import subprocess", gate_source)
+        self.assertNotIn("approved_task_publisher_gate import", gate_source)
+        self.assertNotIn("ak_bermet_approved_task_publisher_gate import", gate_source)
 
     def test_slice3_contracts_expose_evidence_only_not_mutation_authority(self):
         self.assertTrue(hasattr(ExecuteLifecycleAdapter, "execute"))
