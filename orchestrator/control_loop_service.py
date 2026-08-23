@@ -14,21 +14,120 @@ and terminal-reason persistence.
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping, Protocol
 
 import control_loop
 
 _ORIGINAL_CHILD_COMMANDS = control_loop.child_commands
 
 
+@dataclass(frozen=True)
+class ControlShadowObservation:
+    """Read-only, non-authoritative view of current control-loop state."""
+
+    running: bool
+    paused: bool
+    queues: tuple[tuple[str, int], ...]
+    heartbeat_state: str | None
+    heartbeat_stage: str | None
+
+
+class LifecycleShadowObserver(Protocol):
+    """Observation-only boundary; its return value can never grant authority."""
+
+    def observe(self, observation: ControlShadowObservation) -> object: ...
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _shadow_observation(
+    paths: control_loop.ControlPaths,
+) -> ControlShadowObservation:
+    """Read existing runtime artifacts without invoking mutating status probes.
+
+    ``control_loop.status`` tests the supervisor lock by opening it in a mode
+    that creates the file when it is absent.  That is appropriate for the
+    control CLI, but not for a lifecycle shadow.  This reader consequently
+    uses only existence checks, directory iteration, and an existing
+    heartbeat file.  Missing artifacts describe an inactive/empty control
+    loop; malformed or unreadable artifacts fail the outer observation closed.
+    """
+    pause_path = Path(paths.pause)
+    heartbeat_path = Path(paths.heartbeat)
+    lock_path = Path(paths.lock)
+    state_root = pause_path.parent.parent
+    queue_root = state_root / "queue"
+
+    queues: list[tuple[str, int]] = []
+    if queue_root.exists():
+        if queue_root.is_symlink():
+            raise ValueError("control-loop queue root must not be a symlink")
+        for queue_path in sorted(queue_root.iterdir(), key=lambda item: item.name):
+            if queue_path.is_symlink() or not queue_path.is_dir():
+                continue
+            count = sum(
+                1
+                for task_path in queue_path.iterdir()
+                if (
+                    not task_path.is_symlink()
+                    and task_path.is_file()
+                    and task_path.suffix == ".md"
+                )
+            )
+            queues.append((queue_path.name, count))
+
+    heartbeat: Mapping[str, object] = {}
+    if heartbeat_path.exists():
+        if heartbeat_path.is_symlink():
+            raise ValueError("control-loop heartbeat must not be a symlink")
+        decoded = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if not isinstance(decoded, Mapping):
+            raise ValueError("control-loop heartbeat must be a JSON object")
+        heartbeat = decoded
+    return ControlShadowObservation(
+        running=lock_path.exists(),
+        paused=pause_path.exists(),
+        queues=tuple(queues),
+        heartbeat_state=_text_or_none(heartbeat.get("state")),
+        heartbeat_stage=_text_or_none(heartbeat.get("stage")),
+    )
+
+
+def _observe_lifecycle_shadow(
+    paths: control_loop.ControlPaths,
+    observer: LifecycleShadowObserver | None,
+) -> bool:
+    """Offer one non-authoritative observation, failing closed on any error.
+
+    The observer receives no paths, queue items, lifecycle objects, authority
+    bindings, or mutation callback.  Its return value is deliberately ignored.
+    """
+    if observer is None:
+        return False
+    try:
+        observation = _shadow_observation(paths)
+        observer.observe(observation)
+    except Exception:
+        return False
+    return True
+
+
 def _dedicated_telegram_service_only(
-    _paths: control_loop.ControlPaths,
+    paths: control_loop.ControlPaths,
     stop_event: threading.Event,
+    *,
+    shadow_observer: LifecycleShadowObserver | None = None,
     **_kwargs,
 ) -> None:
     """Do not spawn legacy Telegram; wait until Control Center shuts down."""
+    _observe_lifecycle_shadow(paths, shadow_observer)
     stop_event.wait()
 
 
@@ -80,8 +179,28 @@ def _commands_with_publishers(
     ]
 
 
-def main() -> int:
-    control_loop.supervise_telegram_bridge = _dedicated_telegram_service_only
+def main(*, shadow_observer: LifecycleShadowObserver | None = None) -> int:
+    if shadow_observer is None:
+        # Preserve the dedicated-service runtime identity on the normal path.
+        # Shadow observation is strictly opt-in and must not replace the
+        # established adapter when it has not been explicitly configured.
+        control_loop.supervise_telegram_bridge = _dedicated_telegram_service_only
+        control_loop.child_commands = _commands_with_publishers
+        return control_loop.main()
+
+    def dedicated_service(
+        paths: control_loop.ControlPaths,
+        stop_event: threading.Event,
+        **kwargs,
+    ) -> None:
+        _dedicated_telegram_service_only(
+            paths,
+            stop_event,
+            shadow_observer=shadow_observer,
+            **kwargs,
+        )
+
+    control_loop.supervise_telegram_bridge = dedicated_service
     control_loop.child_commands = _commands_with_publishers
     return control_loop.main()
 

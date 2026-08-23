@@ -14,6 +14,7 @@ from orchestrator.universal_task_lifecycle import (
     LifecycleAction,
     intersect_authorities,
 )
+from orchestrator.universal_task_lifecycle_store import InMemoryLifecycleStore
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = ROOT / "orchestrator" / "projects.json"
@@ -77,6 +78,40 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
                 Authority.AUTONOMOUS if enabled else Authority.DENIED,
             )
             self.assertEqual(effective, Authority.DENIED, action.value)
+
+    def test_slice2_store_exposes_no_release_or_production_capability(self):
+        public_store_api = {
+            name for name in dir(InMemoryLifecycleStore) if not name.startswith("_")
+        }
+        self.assertTrue(
+            {
+                "transaction",
+                "transact_inbox_event",
+                "ledger_entries",
+                "projection_intents",
+            }.issubset(public_store_api)
+        )
+        for forbidden in (
+            "commit",
+            "push",
+            "merge",
+            "deploy",
+            "publish",
+            "mutate_queue",
+            "database",
+            "secret",
+            "systemd",
+        ):
+            self.assertNotIn(forbidden, public_store_api)
+
+        service_source = (
+            ROOT / "orchestrator" / "control_loop_service.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("ai_prof_approved_task_publisher", service_source)
+        self.assertNotIn("allow_commits", service_source)
+        self.assertNotIn("allow_push", service_source)
+        self.assertNotIn("allow_merge", service_source)
+        self.assertNotIn("allow_deployment", service_source)
 
     def test_core_authority_files_are_not_autonomous_scope(self):
         allowed = self.project["allowed_scope"]
