@@ -44,10 +44,12 @@
         "tests/test_universal_task_lifecycle_store.py",
         "tests/test_self_maintenance_profile.py",
         "tests/test_control_loop.py",
+        "tests/test_ai_prof_approved_task_publisher_gate.py",
         "orchestrator/TASK_SCHEMA.md",
         "orchestrator/universal_task_lifecycle.py",
         "orchestrator/universal_task_lifecycle_store.py",
         "orchestrator/control_loop_service.py",
+        "orchestrator/ai_prof_approved_task_publisher_gate.py",
         "orchestrator/telegram_bridge.py",
         "orchestrator/telegram_bridge_v2.py",
         "orchestrator/github_task_gateway.py"
