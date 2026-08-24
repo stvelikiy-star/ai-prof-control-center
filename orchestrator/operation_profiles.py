@@ -14,6 +14,15 @@ class OperationProfile:
     kind: str = "migration"
 
 
+AI_PROF_CONTROL_CENTER_HEALTH_CHECK = OperationProfile(
+    key="ai-prof-control-center-health-check",
+    repository=Path("/home/agent/projects/ai-prof-control-center-maintenance"),
+    base_branch="maintenance/base",
+    expected_migration="",
+    kind="control-center-health-check",
+)
+
+
 AK_BERMET_SUPABASE_RPC_DEPLOY = OperationProfile(
     key="ak-bermet-supabase-rpc-deploy",
     repository=Path("/home/agent/projects/ak-bermet"),
@@ -49,6 +58,7 @@ AK_BERMET_STAFF_AUTH_ACTIVATE_DEV = OperationProfile(
 )
 
 PROFILES = {
+    AI_PROF_CONTROL_CENTER_HEALTH_CHECK.key: AI_PROF_CONTROL_CENTER_HEALTH_CHECK,
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
     AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
     AK_BERMET_SHEETS_MIRROR_DRY_RUN.key: AK_BERMET_SHEETS_MIRROR_DRY_RUN,

@@ -51,6 +51,18 @@ class OperationsRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             operations.resolve_profile("anything-else")
 
+    def test_control_center_health_profile_is_exact_and_read_only(self):
+        profile = operations.resolve_profile(
+            "ai-prof-control-center-health-check"
+        )
+        self.assertEqual(
+            profile.repository,
+            Path("/home/agent/projects/ai-prof-control-center-maintenance"),
+        )
+        self.assertEqual(profile.base_branch, "maintenance/base")
+        self.assertEqual(profile.kind, "control-center-health-check")
+        self.assertEqual(profile.expected_migration, "")
+
     def test_exact_repository_restriction_and_dirty_tree_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, profile = self.make_repo(Path(tmp))
@@ -126,6 +138,135 @@ class OperationsRunnerTests(unittest.TestCase):
         safe = operations.redact(raw)
         for secret in ("abc123", "hidden", "hunter2", "user:pass", "topsecret"):
             self.assertNotIn(secret, safe)
+
+    def test_health_environment_removes_python_and_node_injection(self):
+        with mock.patch.dict(
+            operations.os.environ,
+            {
+                "PATH": "/usr/bin:/bin",
+                "PYTHONPATH": "/tmp/injected",
+                "PYTHONHOME": "/tmp/python",
+                "PYTHONSTARTUP": "/tmp/startup.py",
+                "NODE_OPTIONS": "--require=/tmp/injected.js",
+                "SAFE_MARKER": "preserved",
+            },
+            clear=True,
+        ):
+            environment = operations.read_only_health_environment()
+        self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+        self.assertEqual(environment["SAFE_MARKER"], "preserved")
+        self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
+        for name in (
+            "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS"
+        ):
+            self.assertNotIn(name, environment)
+
+    def test_read_only_health_runs_fixed_focused_and_full_checks(self):
+        profile = operations.resolve_profile(
+            "ai-prof-control-center-health-check"
+        )
+        repository = profile.repository
+        calls: list[list[str]] = []
+
+        def fake_run(argv, _repository, _environment, **_kwargs):
+            calls.append(argv)
+            return completed(argv)
+
+        def fake_git(_repository, _environment, *args):
+            if args == ("rev-parse", "--verify", "origin/main"):
+                return "origin-main-sha"
+            if args == ("rev-parse", "HEAD"):
+                return "head-sha"
+            if args == ("status", "--porcelain"):
+                return ""
+            self.fail(f"unexpected git query: {args}")
+
+        with (
+            mock.patch.object(
+                operations, "validate_repository", return_value=repository
+            ),
+            mock.patch.object(operations, "git_output", side_effect=fake_git),
+            mock.patch.object(operations, "run_argv", side_effect=fake_run),
+        ):
+            outcome = operations.execute_profile(profile, str(repository))
+        self.assertEqual(
+            calls[0],
+            [
+                str(operations.GIT_CLI), "merge-base", "--is-ancestor",
+                "origin/main", "HEAD",
+            ],
+        )
+        self.assertEqual(
+            calls[1],
+            [
+                str(operations.PYTHON3_CLI), "-m", "unittest",
+                *operations.HEALTH_TEST_MODULES,
+            ],
+        )
+        self.assertEqual(
+            calls[2],
+            [str(operations.PYTHON3_CLI), "-m", "unittest"],
+        )
+        self.assertEqual(len(calls), 3)
+        self.assertIn('"status":"PASS"', outcome)
+        self.assertIn('"working_tree":"clean"', outcome)
+
+    def test_read_only_health_blocks_stale_base_before_tests(self):
+        profile = operations.resolve_profile(
+            "ai-prof-control-center-health-check"
+        )
+        repository = profile.repository
+
+        def fake_git(_repository, _environment, *args):
+            if args == ("rev-parse", "--verify", "origin/main"):
+                return "origin-main-sha"
+            return "head-sha"
+
+        with (
+            mock.patch.object(
+                operations, "validate_repository", return_value=repository
+            ),
+            mock.patch.object(operations, "git_output", side_effect=fake_git),
+            mock.patch.object(
+                operations,
+                "run_argv",
+                side_effect=operations.OperationFailed("not ancestor"),
+            ) as run,
+        ):
+            with self.assertRaisesRegex(
+                operations.OperationBlocked,
+                "HEALTH_ORIGIN_MAIN_NOT_ANCESTOR",
+            ):
+                operations.execute_profile(profile, str(repository))
+        self.assertEqual(run.call_count, 1)
+
+    def test_read_only_health_fails_if_checks_mutate_head(self):
+        profile = operations.resolve_profile(
+            "ai-prof-control-center-health-check"
+        )
+        repository = profile.repository
+        heads = iter(("head-before", "head-after"))
+
+        def fake_git(_repository, _environment, *args):
+            if args == ("rev-parse", "--verify", "origin/main"):
+                return "origin-main-sha"
+            if args == ("rev-parse", "HEAD"):
+                return next(heads)
+            return ""
+
+        with (
+            mock.patch.object(
+                operations, "validate_repository", return_value=repository
+            ),
+            mock.patch.object(operations, "git_output", side_effect=fake_git),
+            mock.patch.object(
+                operations, "run_argv", return_value=completed([])
+            ),
+        ):
+            with self.assertRaisesRegex(
+                operations.OperationFailed, "changed repository HEAD"
+            ):
+                operations.execute_profile(profile, str(repository))
 
     def test_pending_migration_mismatch_is_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:
