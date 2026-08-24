@@ -63,9 +63,24 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
         }
         if not required.issubset(item):
             raise IntakeError(f"incomplete project registry entry: {project_id}")
-        if any(item[name] is not False for name in (
-            "allow_commits", "allow_push", "allow_merge", "allow_deployment",
-        )):
+        all_write_capabilities_disabled = all(
+            item[name] is False
+            for name in (
+                "allow_commits",
+                "allow_push",
+                "allow_merge",
+                "allow_deployment",
+            )
+        )
+        ai_prof_commit_only = (
+            project_id == "ai-prof-control-center"
+            and item["allow_commits"] is True
+            and all(
+                item[name] is False
+                for name in ("allow_push", "allow_merge", "allow_deployment")
+            )
+        )
+        if not all_write_capabilities_disabled and not ai_prof_commit_only:
             raise IntakeError(f"write/deployment capability enabled for {project_id}")
         raw_path = item["path"]
         if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
