@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Private GitHub issue -> AI PROF validated task-queue gateway.
 
-V1 is deliberately narrow:
+The gateway is deliberately narrow:
 - polls exactly one private repository;
 - accepts only issues created by the fixed owner login;
-- accepts a strict V1 code-only JSON contract;
+- preserves the strict V1 code-only JSON contract;
+- accepts one V2 read-only health operation profile;
 - delegates final project/branch/scope validation to submit_task.py;
 - never executes issue prose as shell input;
 - never grants secrets, deployment, migration, merge, push, commit or
@@ -75,6 +76,9 @@ CONTRACT_KEYS = {
     "owner_approval_gates",
     "acceptance_criteria",
 }
+V2_CONTRACT_KEYS = CONTRACT_KEYS | {"execution_mode", "operation_profile"}
+HEALTH_PROJECT = "ai-prof-control-center"
+HEALTH_OPERATION_PROFILE = "ai-prof-control-center-health-check"
 SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 
 
@@ -125,14 +129,16 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
         raise GatewayError("task body is not valid JSON") from exc
     if not isinstance(contract, dict):
         raise GatewayError("task contract must be a JSON object")
-    if set(contract) != CONTRACT_KEYS:
-        missing = sorted(CONTRACT_KEYS - set(contract))
-        extra = sorted(set(contract) - CONTRACT_KEYS)
+    version = contract.get("version")
+    if version not in (1, 2):
+        raise GatewayError("unsupported task contract version")
+    expected_keys = CONTRACT_KEYS if version == 1 else V2_CONTRACT_KEYS
+    if set(contract) != expected_keys:
+        missing = sorted(expected_keys - set(contract))
+        extra = sorted(set(contract) - expected_keys)
         raise GatewayError(
             f"task contract keys mismatch; missing={missing}; extra={extra}"
         )
-    if contract.get("version") != 1:
-        raise GatewayError("unsupported task contract version")
 
     project = _text("project", contract["project"], limit=80)
     if not SAFE_TOKEN.fullmatch(project):
@@ -167,8 +173,34 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
         "acceptance_criteria", contract["acceptance_criteria"], max_items=20
     )
 
+    execution_mode = "code"
+    operation_profile = "none"
+    if version == 2:
+        execution_mode = _text(
+            "execution_mode", contract["execution_mode"], limit=20
+        )
+        operation_profile = _text(
+            "operation_profile", contract["operation_profile"], limit=80
+        )
+        if execution_mode not in {"code", "operations"}:
+            raise GatewayError("invalid execution_mode")
+        if not SAFE_TOKEN.fullmatch(operation_profile):
+            raise GatewayError("invalid operation_profile")
+        if execution_mode == "code" and operation_profile != "none":
+            raise GatewayError("code mode requires operation_profile=none")
+        if execution_mode == "operations":
+            if (
+                project != HEALTH_PROJECT
+                or operation_profile != HEALTH_OPERATION_PROFILE
+                or allowed != {"tests"}
+            ):
+                raise GatewayError(
+                    "operations mode is restricted to the registered "
+                    "read-only health profile"
+                )
+
     return {
-        "version": 1,
+        "version": version,
         "project": project,
         "title": title,
         "objective": objective,
@@ -178,6 +210,8 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
         "forbidden_actions": sorted(forbidden),
         "owner_approval_gates": gates,
         "acceptance_criteria": acceptance,
+        "execution_mode": execution_mode,
+        "operation_profile": operation_profile,
     }
 
 
@@ -297,6 +331,12 @@ def submit_contract(number: int, contract: dict[str, Any]) -> dict[str, Any]:
         "--work-branch",
         work_branch(number),
     ]
+    if contract["version"] == 2:
+        argv.extend(["--execution-mode", contract["execution_mode"]])
+        if contract["execution_mode"] == "operations":
+            argv.extend(
+                ["--operation-profile", contract["operation_profile"]]
+            )
     for path in contract["scope"]:
         argv.extend(["--scope", path])
     result = subprocess.run(
