@@ -48,7 +48,7 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
             if item["project_id"] == "ai-prof-control-center"
         )
 
-    def test_isolated_target_and_fail_closed_capabilities(self):
+    def test_isolated_target_and_commit_only_capabilities(self):
         self.assertEqual(
             self.project["path"],
             "/home/agent/projects/ai-prof-control-center-maintenance",
@@ -56,18 +56,19 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         self.assertNotEqual(self.project["path"], "/home/agent/projects/ai-prof-control-center")
         self.assertEqual(self.project["base_branch"], "maintenance/base")
         self.assertEqual(self.project["allowed_base_branches"], ["maintenance/base"])
-        for key in ("allow_commits", "allow_push", "allow_merge", "allow_deployment"):
+        self.assertIs(self.project["allow_commits"], True)
+        for key in ("allow_push", "allow_merge", "allow_deployment"):
             self.assertIs(self.project[key], False)
 
-    def test_lifecycle_cannot_grant_publish_pr_or_merge_authority(self):
-        for key in ("allow_commits", "allow_push", "allow_merge"):
+    def test_lifecycle_cannot_grant_push_pr_or_merge_authority(self):
+        for key in ("allow_push", "allow_merge"):
             self.assertIs(self.project[key], False)
 
         declared = self.project.get("lifecycle_authority", {})
         self.assertIsInstance(declared, dict)
         capability_gate = {
-            LifecycleAction.PUBLISH: self.project["allow_commits"]
-            and self.project["allow_push"],
+            LifecycleAction.COMMIT: self.project["allow_commits"],
+            LifecycleAction.PUBLISH: self.project["allow_push"],
             LifecycleAction.PR: self.project["allow_push"],
             LifecycleAction.MERGE: self.project["allow_merge"],
         }
@@ -81,9 +82,15 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
                 configured,
                 Authority.AUTONOMOUS if enabled else Authority.DENIED,
             )
-            self.assertEqual(effective, Authority.DENIED, action.value)
+            if action is LifecycleAction.COMMIT:
+                self.assertIn(
+                    effective, (Authority.DENIED, Authority.OWNER_ONLY),
+                    action.value,
+                )
+            else:
+                self.assertEqual(effective, Authority.DENIED, action.value)
 
-    def test_slice4_route_does_not_broaden_release_or_production_capability(self):
+    def test_slice5a_route_does_not_broaden_release_or_production_capability(self):
         public_store_api = {
             name for name in dir(InMemoryLifecycleStore) if not name.startswith("_")
         }
@@ -124,7 +131,10 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
             "/home/agent/projects/ai-prof-control-center-maintenance", gate_source
         )
         self.assertIn("OWNER_ACTION_REQUIRED", gate_source)
-        self.assertNotIn("import subprocess", gate_source)
+        self.assertIn("import subprocess", gate_source)
+        self.assertIn('"update-ref"', gate_source)
+        self.assertNotIn('["gh"', gate_source)
+        self.assertNotIn('"push"', gate_source)
         self.assertNotIn("approved_task_publisher_gate import", gate_source)
         self.assertNotIn("ak_bermet_approved_task_publisher_gate import", gate_source)
 
