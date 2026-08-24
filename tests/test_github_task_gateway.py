@@ -145,6 +145,32 @@ class GitHubTaskGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(gateway.GatewayError, "keys mismatch"):
             gateway.parse_contract(issue(task=extra))
 
+    def test_rendered_instructions_match_real_intake_boundary(self):
+        parsed = gateway.parse_contract(issue(task=health_contract()))
+        rendered = gateway.render_instructions(120, parsed)
+        self.assertNotIn("\n", rendered)
+        self.assertNotIn("\r", rendered)
+        self.assertLessEqual(
+            len(rendered), gateway.MAX_RENDERED_INSTRUCTIONS
+        )
+
+        long_contract = health_contract()
+        long_contract["objective"] = "x" * 3900
+        parsed_long = gateway.parse_contract(issue(task=long_contract))
+        with self.assertRaisesRegex(
+            gateway.GatewayError, "4000-character limit"
+        ):
+            gateway.render_instructions(120, parsed_long)
+
+        multiline = health_contract()
+        multiline["objective"] = "line one\nline two"
+        with self.assertRaisesRegex(gateway.GatewayError, "one line"):
+            gateway.parse_contract(issue(task=multiline))
+
+        long_title = health_contract("x" * 121)
+        with self.assertRaises(gateway.GatewayError):
+            gateway.parse_contract(issue(task=long_title))
+
     def test_contract_rejects_extra_key_and_title_mismatch(self):
         extra = contract()
         extra["shell"] = "id"
