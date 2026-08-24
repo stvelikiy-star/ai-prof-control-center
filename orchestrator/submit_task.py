@@ -230,6 +230,7 @@ def render_task(
     work_branch: str, scope: list[str], execution_mode: str = "code",
     operation_profile: str = "none", base_branch: str | None = None,
     metadata: list[tuple[str, str]] | None = None,
+    publication_action: str = "none",
 ) -> str:
     required_commands = project.get("code_required_commands", ["git", "python3"])
     required_checks = project.get("code_required_checks", [])
@@ -246,6 +247,9 @@ def render_task(
         required_checks = []
     else:
         validate_npm_run_checks(project, required_checks)
+    out_of_scope = "All files outside Scope-Files; commit, push, merge, deployment"
+    if publication_action == "commit":
+        out_of_scope = "All files outside Scope-Files; push, merge, deployment"
     values = [
         ("Task-ID", task_id),
         ("Execution-Mode", execution_mode),
@@ -257,7 +261,7 @@ def render_task(
         ("Goal", title),
         ("Instructions", instructions),
         ("Scope", "Only the approved Scope-Files listed below"),
-        ("Out-of-Scope", "All files outside Scope-Files; commit, push, merge, deployment"),
+        ("Out-of-Scope", out_of_scope),
         ("Pass-Criteria", "Requested change is complete and all required checks pass"),
         ("Required-Checks", ", ".join(required_checks) if required_checks else "none"),
         ("Required-Commands", ", ".join(required_commands)),
@@ -394,6 +398,10 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--scope", action="append", required=True)
     create.add_argument("--execution-mode", choices=("code", "operations"), default="code")
     create.add_argument("--operation-profile")
+    create.add_argument(
+        "--publication-action", choices=("commit",), default=None
+    )
+    create.add_argument("--publication-source-issue", type=int)
     create.add_argument("--dry-run", action="store_true")
     commands.add_parser("list")
     show = commands.add_parser("show")
@@ -460,10 +468,50 @@ def main() -> int:
             ):
                 raise IntakeError("work branch is outside the project prefix allowlist")
             scope = validate_scope(Path(project["path"]), args.scope, project["allowed_scope"])
+            publication_metadata: list[tuple[str, str]] = []
+            publication_action = args.publication_action or "none"
+            if publication_action == "commit":
+                if (
+                    args.project != "ai-prof-control-center"
+                    or args.execution_mode != "code"
+                    or args.operation_profile
+                    or base_branch != "maintenance/base"
+                    or args.publication_source_issue is None
+                    or args.publication_source_issue <= 0
+                    or args.work_branch
+                    != f"feature/chatgpt-issue-{args.publication_source_issue}"
+                    or project.get("allow_commits") is not True
+                    or any(
+                        project.get(flag) is not False
+                        for flag in ("allow_push", "allow_merge", "allow_deployment")
+                    )
+                    or scope != sorted(set(scope))
+                ):
+                    raise IntakeError(
+                        "publication action is outside commit-only AI PROF authority"
+                    )
+                publication_metadata = [
+                    ("Publication-Contract-Version", "3"),
+                    ("Publication-Action", "commit"),
+                    (
+                        "Publication-Source-Issue",
+                        str(args.publication_source_issue),
+                    ),
+                    (
+                        "Publication-Repository",
+                        "stvelikiy-star/ai-prof-control-center",
+                    ),
+                ]
+            elif args.publication_source_issue is not None:
+                raise IntakeError(
+                    "publication source issue requires a publication action"
+                )
             task_id = make_task_id(args.project)
             content = render_task(
                 project, task_id, title, instructions, args.work_branch, scope,
                 args.execution_mode, args.operation_profile or "none", base_branch,
+                publication_metadata,
+                publication_action,
             )
             result = {
                 "task_id": task_id,

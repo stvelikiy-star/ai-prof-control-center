@@ -6,10 +6,11 @@ The gateway is deliberately narrow:
 - accepts only issues created by the fixed owner login;
 - preserves the strict V1 code-only JSON contract;
 - accepts one V2 read-only health operation profile;
+- accepts one V3 owner-only AI PROF local-commit contract;
 - delegates final project/branch/scope validation to submit_task.py;
 - never executes issue prose as shell input;
-- never grants secrets, deployment, migration, merge, push, commit or
-  destructive authority;
+- never grants secrets, deployment, migration, merge, push or destructive
+  authority;
 - deduplicates by GitHub issue even after a crash between task creation and
   gateway-state persistence.
 """
@@ -78,6 +79,9 @@ CONTRACT_KEYS = {
     "acceptance_criteria",
 }
 V2_CONTRACT_KEYS = CONTRACT_KEYS | {"execution_mode", "operation_profile"}
+V3_CONTRACT_KEYS = CONTRACT_KEYS | {"publication_action"}
+V3_ALLOWED_ACTIONS = ALLOWED_ACTIONS | {"commit"}
+V3_REQUIRED_FORBIDDEN = REQUIRED_FORBIDDEN - {"commit"}
 HEALTH_PROJECT = "ai-prof-control-center"
 HEALTH_OPERATION_PROFILE = "ai-prof-control-center-health-check"
 SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
@@ -133,9 +137,15 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(contract, dict):
         raise GatewayError("task contract must be a JSON object")
     version = contract.get("version")
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise GatewayError("unsupported task contract version")
-    expected_keys = CONTRACT_KEYS if version == 1 else V2_CONTRACT_KEYS
+    expected_keys = (
+        CONTRACT_KEYS
+        if version == 1
+        else V2_CONTRACT_KEYS
+        if version == 2
+        else V3_CONTRACT_KEYS
+    )
     if set(contract) != expected_keys:
         missing = sorted(expected_keys - set(contract))
         extra = sorted(set(contract) - expected_keys)
@@ -158,14 +168,18 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
     allowed = set(
         _string_list("allowed_actions", contract["allowed_actions"], max_items=10)
     )
-    if not allowed.issubset(ALLOWED_ACTIONS):
+    supported_actions = V3_ALLOWED_ACTIONS if version == 3 else ALLOWED_ACTIONS
+    if not allowed.issubset(supported_actions):
         raise GatewayError("allowed_actions contains unsupported authority")
     forbidden = set(
         _string_list(
             "forbidden_actions", contract["forbidden_actions"], max_items=20
         )
     )
-    if not REQUIRED_FORBIDDEN.issubset(forbidden):
+    required_forbidden = (
+        V3_REQUIRED_FORBIDDEN if version == 3 else REQUIRED_FORBIDDEN
+    )
+    if not required_forbidden.issubset(forbidden):
         raise GatewayError(
             "forbidden_actions must preserve the V1 safety boundary"
         )
@@ -178,6 +192,7 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
 
     execution_mode = "code"
     operation_profile = "none"
+    publication_action = "none"
     if version == 2:
         execution_mode = _text(
             "execution_mode", contract["execution_mode"], limit=20
@@ -201,6 +216,21 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
                     "operations mode is restricted to the registered "
                     "read-only health profile"
                 )
+    elif version == 3:
+        publication_action = _text(
+            "publication_action", contract["publication_action"], limit=20
+        )
+        if (
+            project != HEALTH_PROJECT
+            or publication_action != "commit"
+            or "commit" not in allowed
+            or "commit" in forbidden
+        ):
+            raise GatewayError(
+                "V3 is restricted to owner-approved AI PROF commit-only tasks"
+            )
+        if scope != sorted(set(scope)):
+            raise GatewayError("V3 scope must be unique and sorted")
 
     return {
         "version": version,
@@ -215,6 +245,7 @@ def parse_contract(issue: dict[str, Any]) -> dict[str, Any]:
         "acceptance_criteria": acceptance,
         "execution_mode": execution_mode,
         "operation_profile": operation_profile,
+        "publication_action": publication_action,
     }
 
 
@@ -344,6 +375,15 @@ def submit_contract(number: int, contract: dict[str, Any]) -> dict[str, Any]:
             argv.extend(
                 ["--operation-profile", contract["operation_profile"]]
             )
+    elif contract["version"] == 3:
+        argv.extend(
+            [
+                "--publication-action",
+                contract["publication_action"],
+                "--publication-source-issue",
+                str(number),
+            ]
+        )
     for path in contract["scope"]:
         argv.extend(["--scope", path])
     result = subprocess.run(
