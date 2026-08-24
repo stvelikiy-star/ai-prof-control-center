@@ -58,6 +58,21 @@ def contract(title: str = "Gateway test") -> dict:
     }
 
 
+def health_contract(title: str = "Control Center health") -> dict:
+    task = contract(title)
+    task.update(
+        {
+            "version": 2,
+            "objective": "Run the registered read-only Control Center health check.",
+            "scope": ["reports/AI_PROF_RUNTIME_HEALTH.md"],
+            "allowed_actions": ["tests"],
+            "execution_mode": "operations",
+            "operation_profile": gateway.HEALTH_OPERATION_PROFILE,
+        }
+    )
+    return task
+
+
 def issue(
     number: int = 3,
     *,
@@ -93,6 +108,42 @@ class GitHubTaskGatewayTests(unittest.TestCase):
                 set(parsed["forbidden_actions"])
             )
         )
+
+    def test_v2_accepts_only_registered_read_only_health_profile(self):
+        parsed = gateway.parse_contract(issue(task=health_contract()))
+        self.assertEqual(parsed["version"], 2)
+        self.assertEqual(parsed["execution_mode"], "operations")
+        self.assertEqual(
+            parsed["operation_profile"], gateway.HEALTH_OPERATION_PROFILE
+        )
+
+        cases = []
+        unknown = health_contract()
+        unknown["operation_profile"] = "unknown-profile"
+        cases.append(unknown)
+        cross_project = health_contract()
+        cross_project["project"] = "ak-bermet"
+        cases.append(cross_project)
+        broad = health_contract()
+        broad["allowed_actions"] = ["tests", "code-edit"]
+        cases.append(broad)
+        code_with_profile = health_contract()
+        code_with_profile["execution_mode"] = "code"
+        cases.append(code_with_profile)
+        for task in cases:
+            with self.subTest(task=task):
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.parse_contract(issue(task=task))
+
+    def test_v2_requires_exact_mode_profile_keys(self):
+        missing = health_contract()
+        missing.pop("operation_profile")
+        with self.assertRaisesRegex(gateway.GatewayError, "keys mismatch"):
+            gateway.parse_contract(issue(task=missing))
+        extra = health_contract()
+        extra["command"] = "id"
+        with self.assertRaisesRegex(gateway.GatewayError, "keys mismatch"):
+            gateway.parse_contract(issue(task=extra))
 
     def test_contract_rejects_extra_key_and_title_mismatch(self):
         extra = contract()
@@ -164,6 +215,58 @@ class GitHubTaskGatewayTests(unittest.TestCase):
         self.assertFalse(kwargs.get("shell", False))
         self.assertNotIn("sh", argv)
         self.assertNotIn("bash", argv)
+
+    def test_v2_submit_selects_operations_without_shell(self):
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "task_id": (
+                        "AI_PROF_CONTROL_CENTER_20260824T100000Z_ABCDEF"
+                    ),
+                    "queue": "pending",
+                }
+            ),
+            "",
+        )
+        parsed = gateway.parse_contract(issue(45, task=health_contract()))
+        with mock.patch.object(
+            gateway.subprocess, "run", return_value=result
+        ) as run:
+            gateway.submit_contract(45, parsed)
+        argv = run.call_args.args[0]
+        self.assertIn("--execution-mode", argv)
+        self.assertEqual(argv[argv.index("--execution-mode") + 1], "operations")
+        self.assertIn("--operation-profile", argv)
+        self.assertEqual(
+            argv[argv.index("--operation-profile") + 1],
+            gateway.HEALTH_OPERATION_PROFILE,
+        )
+        self.assertFalse(run.call_args.kwargs.get("shell", False))
+
+    def test_v1_submit_argv_remains_code_default(self):
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "task_id": (
+                        "AI_PROF_CONTROL_CENTER_20260824T100001Z_ABCDEF"
+                    ),
+                    "queue": "pending",
+                }
+            ),
+            "",
+        )
+        parsed = gateway.parse_contract(issue(46))
+        with mock.patch.object(
+            gateway.subprocess, "run", return_value=result
+        ) as run:
+            gateway.submit_contract(46, parsed)
+        argv = run.call_args.args[0]
+        self.assertNotIn("--execution-mode", argv)
+        self.assertNotIn("--operation-profile", argv)
 
     def test_same_issue_is_imported_only_once_with_persisted_state(self):
         state: dict[str, dict] = {}
