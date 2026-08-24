@@ -262,7 +262,7 @@ def _commands_with_ai_prof_publisher_gate(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
-    """Add the denial-only AI PROF route without changing legacy composition."""
+    """Add the commit-only AI PROF gate without changing legacy composition."""
     established = _commands_with_publishers(root, runtime)
     ai_prof_publisher_gate = _publisher_argv(
         root,

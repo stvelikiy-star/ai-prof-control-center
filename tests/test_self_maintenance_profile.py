@@ -206,6 +206,34 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         self.assertEqual(self.project["code_required_commands"], ["git", "python3"])
         self.assertEqual(self.project["code_required_checks"], ["python3 -m unittest"])
 
+    def test_v3_commit_task_has_structured_identity_without_publish_authority(self):
+        content = submit_task.render_task(
+            self.project,
+            "AI_PROF_CONTROL_CENTER_20260824T100003Z_ABCDEF",
+            "Approved local commit",
+            "Create only the exact approved local commit.",
+            "feature/chatgpt-issue-128",
+            ["reports/AI_PROF_COMMIT_EVIDENCE.md"],
+            metadata=[
+                ("Publication-Contract-Version", "3"),
+                ("Publication-Action", "commit"),
+                ("Publication-Source-Issue", "128"),
+                (
+                    "Publication-Repository",
+                    "stvelikiy-star/ai-prof-control-center",
+                ),
+            ],
+            publication_action="commit",
+        )
+        self.assertIn("Publication-Contract-Version: 3\n", content)
+        self.assertIn("Publication-Action: commit\n", content)
+        self.assertIn("Publication-Source-Issue: 128\n", content)
+        self.assertIn(
+            "Out-of-Scope: All files outside Scope-Files; push, merge, deployment\n",
+            content,
+        )
+        self.assertNotIn("Out-of-Scope: All files outside Scope-Files; commit,", content)
+
     def test_required_agent_context_is_complete(self):
         self.assertEqual(self.project["agent_context"], "agents/ai-prof-control-center")
         for name in (

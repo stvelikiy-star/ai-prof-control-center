@@ -73,6 +73,27 @@ def health_contract(title: str = "Control Center health") -> dict:
     return task
 
 
+def commit_contract(title: str = "Approved local commit") -> dict:
+    task = contract(title)
+    task.update(
+        {
+            "version": 3,
+            "objective": "Create one local commit after exact lifecycle evidence passes.",
+            "scope": ["reports/AI_PROF_COMMIT_EVIDENCE.md"],
+            "allowed_actions": ["commit", "docs", "tests"],
+            "forbidden_actions": [
+                "push",
+                "merge",
+                "deployment",
+                "secrets",
+                "destructive-operations",
+            ],
+            "publication_action": "commit",
+        }
+    )
+    return task
+
+
 def issue(
     number: int = 3,
     *,
@@ -144,6 +165,55 @@ class GitHubTaskGatewayTests(unittest.TestCase):
         extra["command"] = "id"
         with self.assertRaisesRegex(gateway.GatewayError, "keys mismatch"):
             gateway.parse_contract(issue(task=extra))
+
+    def test_v3_is_owner_ai_prof_commit_only_and_v1_v2_remain_closed(self):
+        parsed = gateway.parse_contract(issue(128, task=commit_contract()))
+        self.assertEqual(parsed["version"], 3)
+        self.assertEqual(parsed["publication_action"], "commit")
+        self.assertIn("commit", parsed["allowed_actions"])
+        self.assertNotIn("commit", parsed["forbidden_actions"])
+        self.assertTrue(
+            gateway.V3_REQUIRED_FORBIDDEN.issubset(
+                set(parsed["forbidden_actions"])
+            )
+        )
+
+        for version_contract in (contract(), health_contract()):
+            version_contract["allowed_actions"].append("commit")
+            with self.subTest(version=version_contract["version"], kind="allowed"):
+                with self.assertRaisesRegex(gateway.GatewayError, "unsupported authority"):
+                    gateway.parse_contract(issue(task=version_contract))
+
+            version_contract["allowed_actions"].remove("commit")
+            version_contract["forbidden_actions"].remove("commit")
+            with self.subTest(version=version_contract["version"], kind="forbidden"):
+                with self.assertRaisesRegex(gateway.GatewayError, "safety boundary"):
+                    gateway.parse_contract(issue(task=version_contract))
+
+    def test_v3_rejects_cross_project_ambiguous_or_weakened_authority(self):
+        cases = []
+        cross_project = commit_contract()
+        cross_project["project"] = "ak-bermet"
+        cases.append(cross_project)
+        wrong_action = commit_contract()
+        wrong_action["publication_action"] = "push"
+        cases.append(wrong_action)
+        commit_forbidden = commit_contract()
+        commit_forbidden["forbidden_actions"].append("commit")
+        cases.append(commit_forbidden)
+        weak = commit_contract()
+        weak["forbidden_actions"].remove("deployment")
+        cases.append(weak)
+        duplicate_scope = commit_contract()
+        duplicate_scope["scope"] *= 2
+        cases.append(duplicate_scope)
+        unsorted_scope = commit_contract()
+        unsorted_scope["scope"] = ["tests/z.py", "reports/a.md"]
+        cases.append(unsorted_scope)
+        for task in cases:
+            with self.subTest(task=task):
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.parse_contract(issue(task=task))
 
     def test_rendered_instructions_match_real_intake_boundary(self):
         parsed = gateway.parse_contract(issue(task=health_contract()))
@@ -268,6 +338,36 @@ class GitHubTaskGatewayTests(unittest.TestCase):
         self.assertEqual(
             argv[argv.index("--operation-profile") + 1],
             gateway.HEALTH_OPERATION_PROFILE,
+        )
+        self.assertFalse(run.call_args.kwargs.get("shell", False))
+
+    def test_v3_submit_carries_structured_publication_identity_without_shell(self):
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "task_id": "AI_PROF_CONTROL_CENTER_20260824T100002Z_ABCDEF",
+                    "queue": "pending",
+                }
+            ),
+            "",
+        )
+        parsed = gateway.parse_contract(issue(128, task=commit_contract()))
+        with mock.patch.object(
+            gateway.subprocess, "run", return_value=result
+        ) as run:
+            gateway.submit_contract(128, parsed)
+        argv = run.call_args.args[0]
+        self.assertEqual(
+            argv[argv.index("--publication-action") + 1], "commit"
+        )
+        self.assertEqual(
+            argv[argv.index("--publication-source-issue") + 1], "128"
+        )
+        self.assertEqual(
+            argv[argv.index("--work-branch") + 1],
+            "feature/chatgpt-issue-128",
         )
         self.assertFalse(run.call_args.kwargs.get("shell", False))
 

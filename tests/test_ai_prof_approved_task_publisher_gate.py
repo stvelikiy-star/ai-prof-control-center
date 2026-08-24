@@ -208,22 +208,108 @@ class AIProfCommitOnlyGateTests(unittest.TestCase):
                 root = Path(tmp) / "root"
                 state = Path(tmp) / "state"
                 (root / "orchestrator").mkdir(parents=True)
-                (state / "validated").mkdir(parents=True)
+                approved = state / "queue/approved"
+                logs = state / "logs/orchestrator"
+                approved.mkdir(parents=True)
+                logs.mkdir(parents=True)
                 (root / "orchestrator/projects.json").write_text(
                     json.dumps({"projects": [self.profile]}), encoding="utf-8"
                 )
-                (state / "validated/ai-prof-approved-task.json").write_text(
-                    json.dumps({"task": self.task, "repository": self.repository}),
-                    encoding="utf-8",
+                task_path = approved / f"{self.task['task_id']}.md"
+                task_path.write_text(
+                    self._approved_task_text(), encoding="utf-8"
+                )
+                (logs / f"{self.task['task_id']}-01B-test.log").write_text(
+                    "STAGE_01B_CODEX_PASS\nchecks passed\n", encoding="utf-8"
+                )
+                (logs / f"{self.task['task_id']}-01C-test.log").write_text(
+                    "STAGE_01C_AUDIT_PASS\naudit passed\n", encoding="utf-8"
                 )
                 commit.return_value = "c" * 40
-                decision = gate.run_once(root, state)
+                with mock.patch.object(
+                    gate, "_repository_base_sha", return_value="a" * 40
+                ):
+                    decision = gate.run_once(root, state)
                 self.assertEqual(decision.decision, "COMMITTED")
                 self.assertFalse(decision.published)
                 self.assertFalse(decision.complete)
                 commit.assert_called_once()
 
+    def _approved_task_text(self, **overrides):
+        values = {
+            "Task-ID": self.task["task_id"],
+            "Execution-Mode": "code",
+            "Operation-Profile": "none",
+            "Project-Path": gate.PROJECT_PATH,
+            "Base-Branch": gate.BASE_BRANCH,
+            "Work-Branch": self.task["work_branch"],
+            "Agent-Context": gate.AGENT_CONTEXT,
+            "Scope-Files": ", ".join(self.scope),
+            "Publication-Contract-Version": "3",
+            "Publication-Action": "commit",
+            "Publication-Source-Issue": "125",
+            "Publication-Repository": gate.SOURCE_REPOSITORY,
+        }
+        values.update(overrides)
+        return "".join(f"{key}: {value}\n" for key, value in values.items())
+
+    def test_legacy_approved_tasks_are_ignored_and_v3_is_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approved = Path(tmp) / "queue/approved"
+            approved.mkdir(parents=True)
+            (approved / "LEGACY_TASK.md").write_text(
+                "Task-ID: LEGACY_TASK\nExecution-Mode: code\n", encoding="utf-8"
+            )
+            selected_path = approved / f"{self.task['task_id']}.md"
+            selected_path.write_text(self._approved_task_text(), encoding="utf-8")
+            selected = gate._select_approved_commit_task(Path(tmp))
+            self.assertEqual(selected["task_id"], self.task["task_id"])
+
+    def test_explicit_malformed_or_ambiguous_v3_tasks_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approved = Path(tmp) / "queue/approved"
+            approved.mkdir(parents=True)
+            task_path = approved / f"{self.task['task_id']}.md"
+            task_path.write_text(
+                self._approved_task_text(**{"Publication-Contract-Version": "2"}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(gate.CommitBlocked, "wrong_publication_contract"):
+                gate._select_approved_commit_task(Path(tmp))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            approved = Path(tmp) / "queue/approved"
+            approved.mkdir(parents=True)
+            first = approved / f"{self.task['task_id']}.md"
+            first.write_text(self._approved_task_text(), encoding="utf-8")
+            second_id = "AI_PROF_CONTROL_CENTER_OTHER"
+            second = approved / f"{second_id}.md"
+            second.write_text(
+                self._approved_task_text(**{"Task-ID": second_id}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(gate.CommitBlocked, "ambiguous_approved_task"):
+                gate._select_approved_commit_task(Path(tmp))
+
+    def test_stage_01b_and_01c_exact_pass_evidence_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            logs = state / "logs/orchestrator"
+            logs.mkdir(parents=True)
+            with self.assertRaisesRegex(gate.CommitBlocked, "stage_01b_evidence_missing"):
+                gate._verify_stage_evidence(state, self.task["task_id"])
+            (logs / f"{self.task['task_id']}-01B-test.log").write_text(
+                "FAIL\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(gate.CommitBlocked, "stage_01b_not_passed"):
+                gate._verify_stage_evidence(state, self.task["task_id"])
+            (logs / f"{self.task['task_id']}-01B-test.log").write_text(
+                "STAGE_01B_CLAUDE_PASS\n", encoding="utf-8"
+            )
+            (logs / f"{self.task['task_id']}-01C-test.log").write_text(
+                "STAGE_01C_AUDIT_PASS\n", encoding="utf-8"
+            )
+            gate._verify_stage_evidence(state, self.task["task_id"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
