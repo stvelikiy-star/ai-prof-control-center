@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import stat
@@ -36,6 +37,12 @@ _SPEC.loader.exec_module(orch)
 COMMAND_TIMEOUT_SECONDS = 900
 TRANSIENT_ATTEMPTS = 3
 GIT_CLI = Path("/usr/bin/git")
+PYTHON3_CLI = Path("/usr/bin/python3")
+HEALTH_TEST_MODULES = (
+    "tests.test_ai_prof_approved_task_publisher_gate",
+    "tests.test_control_loop",
+    "tests.test_self_maintenance_profile",
+)
 MIGRATION_RE = re.compile(r"(?<!\d)(\d{14})(?!\d)")
 TRANSIENT_POSTGRES_MARKERS = (
     "connection refused", "connection reset", "connection timed out",
@@ -57,6 +64,14 @@ UNSAFE_ENVIRONMENT_NAMES = frozenset({
     "NPM_CONFIG_SCRIPT_SHELL",
     "npm_config_script_shell",
 })
+UNSAFE_HEALTH_ENVIRONMENT_NAMES = UNSAFE_ENVIRONMENT_NAMES | {
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONINSPECT",
+    "PYTHONBREAKPOINT",
+    "PYTHONWARNINGS",
+}
 LEGACY_SHEETS_DRY_RUN_GOAL = "Sheets mirror runtime dry-run"
 LEGACY_SHEETS_DRY_RUN_PROFILE = "ak-bermet-sheets-mirror-dry-run"
 LEGACY_SHEETS_DRY_RUN_PROJECT = "/home/agent/projects/ak-bermet"
@@ -97,6 +112,15 @@ def operation_environment(node_bin: Path) -> dict[str, str]:
     environment["PATH"] = (
         f"{node_bin}{os.pathsep}{current_path}" if current_path else str(node_bin)
     )
+    return environment
+
+
+def read_only_health_environment() -> dict[str, str]:
+    """Return a sanitized environment for fixed read-only Python checks."""
+    environment = os.environ.copy()
+    for name in UNSAFE_HEALTH_ENVIRONMENT_NAMES:
+        environment.pop(name, None)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     return environment
 
 
@@ -291,7 +315,67 @@ def execute_staff_auth_activate_dev(profile: OperationProfile, requested_path: s
     return result.summary()
 
 
+def execute_control_center_health_check(
+    profile: OperationProfile, requested_path: str,
+) -> str:
+    """Run fixed read-only reconciliation checks in the real maintenance tree."""
+    if profile.kind != "control-center-health-check":
+        raise OperationBlocked("invalid control-center health operation kind")
+    environment = read_only_health_environment()
+    repository = validate_repository(profile, requested_path, environment)
+    head = git_output(repository, environment, "rev-parse", "HEAD")
+    origin_main = git_output(
+        repository, environment, "rev-parse", "--verify", "origin/main"
+    )
+    try:
+        run_argv(
+            [
+                str(GIT_CLI), "merge-base", "--is-ancestor",
+                "origin/main", "HEAD",
+            ],
+            repository,
+            environment,
+            timeout=60,
+        )
+    except OperationFailed as exc:
+        raise OperationBlocked(
+            "HEALTH_ORIGIN_MAIN_NOT_ANCESTOR_OF_MAINTENANCE_HEAD"
+        ) from exc
+
+    run_argv(
+        [str(PYTHON3_CLI), "-m", "unittest", *HEALTH_TEST_MODULES],
+        repository,
+        environment,
+    )
+    run_argv(
+        [str(PYTHON3_CLI), "-m", "unittest"],
+        repository,
+        environment,
+    )
+
+    if git_output(repository, environment, "rev-parse", "HEAD") != head:
+        raise OperationFailed("health checks changed repository HEAD")
+    if git_output(repository, environment, "status", "--porcelain"):
+        raise OperationFailed("health checks changed the working tree")
+    return json.dumps(
+        {
+            "branch": profile.base_branch,
+            "focused_tests": "PASS",
+            "full_tests": "PASS",
+            "head": head,
+            "origin_main": origin_main,
+            "profile": profile.key,
+            "status": "PASS",
+            "working_tree": "clean",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def execute_profile(profile: OperationProfile, requested_path: str) -> str:
+    if profile.kind == "control-center-health-check":
+        return execute_control_center_health_check(profile, requested_path)
     if profile.kind == "release-v6-prepare":
         return execute_release_v6_prepare(profile, requested_path)
     if profile.kind == "sheets-mirror-dry-run":
