@@ -15,7 +15,7 @@
         "tests/**"
       ],
       "agent_context": "agents/ai-prof-pilot",
-      "allow_commits": false,
+      "allow_commits": true,
       "allow_push": false,
       "allow_merge": false,
       "allow_deployment": false
