@@ -29,7 +29,7 @@ Never upgrade `UNKNOWN`, `VALIDATE`, `PROPOSED`, or `IMPLEMENTED` to `VERIFIED` 
 
 ## Recovery artifact rule
 
-`recovery-artifacts/pms-grid/PMSGrid.tsx` is a recovered UI prototype only. It uses mock data and references a future `/api/v1/pms/grid` feed. It is NOT evidence of an implemented PMS backend, booking engine, database, API, or production workflow.
+`recovery-artifacts/pms-grid/PMSGrid.tsx` is a recovered UI prototype only. It uses mock data and remains historical/recovery evidence. It must not override current code, current tests, or canonical Current State.
 
 ## Engineering rules
 
@@ -38,17 +38,21 @@ Never upgrade `UNKNOWN`, `VALIDATE`, `PROPOSED`, or `IMPLEMENTED` to `VERIFIED` 
 - Do not read, expose, commit, or modify secrets, `.env*`, credentials, production tokens, or unrelated project data.
 - Ordinary code tasks may not commit, push, merge, deploy, mutate production, or run destructive database operations.
 - No production database mutation, payment activation, irreversible operation, or deployment without an explicit owner gate and a separate bounded operation path.
-- Fail closed on scope, branch, authorization, test, or evidence ambiguity.
+- No ordinary task may modify the repository-owned verification gate (`package.json`, `control-center-verify.mjs`, or `.github/workflows/**`).
+- The required Stage 01B check is the repository-owned root `npm test`; do not replace it with ad-hoc commands or weaker checks.
+- Fail closed on scope, branch, authorization, test, verification-contract, or evidence ambiguity.
 - Do not invent stack, schema, API, integrations, providers, completion claims, or business rules.
 
 ## Current development sequence
 
-The repository is a clean bootstrap baseline, not a recovered production application. Work proceeds as:
+Resort OS is no longer only a bootstrap repository. The repository now contains implemented and tested Admin, Public Web, Staff, Resort Core/API, database/migration and PMS/booking/payment-domain surfaces. This is repository implementation evidence, not proof of a live production deployment.
 
-CANONICAL KNOWLEDGE -> CURRENT STATE -> GAP -> PRIORITY -> IMPLEMENT -> TEST -> EVIDENCE -> VERIFIED / NOT VERIFIED -> CURRENT STATE UPDATE.
+Work proceeds as:
 
-Initial engineering should establish the minimal application/toolchain only after the target stack and first vertical slice are justified by current canonical architecture and task evidence.
+CURRENT STATE -> VERIFIED GAP -> BOUNDED PRIORITY -> IMPLEMENT -> REPOSITORY-OWNED `npm test` -> DOMAIN/CI EVIDENCE -> VERIFIED / NOT VERIFIED -> CURRENT STATE UPDATE.
+
+Do not rebuild recovered implementation from scratch. Extend or repair the current canonical implementation only after verifying the exact current `main` and the relevant domain contract.
 
 ## Status reporting
 
-Use precise statuses such as `VERIFIED/PASS`, `IMPLEMENTED`, `VALIDATE`, `UNKNOWN`, `BLOCKED`, `FAILED`. Never imply that a file, route, UI, mock, or migration proves an end-to-end workflow unless it was actually exercised and evidenced.
+Use precise statuses such as `VERIFIED/PASS`, `IMPLEMENTED`, `VALIDATE`, `UNKNOWN`, `BLOCKED`, `FAILED`. Never imply that a file, route, UI, migration, CI pass, or local test proves a production deployment unless production was actually exercised and evidenced.
