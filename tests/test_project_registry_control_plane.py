@@ -51,15 +51,18 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
                 with self.subTest(project=project["project_id"], check=check):
                     self.assertIn(check, allowed)
 
-    def test_resort_os_is_fail_closed_until_monorepo_catalog_exists(self):
+    def test_resort_os_uses_allowlisted_repository_owned_monorepo_contract(self):
         project = self.by_id["resort-os"]
-        self.assertIs(project["enabled"], False)
-        self.assertEqual(
-            project["code_required_checks"],
-            ["__RESORT_OS_MONOREPO_CHECK_CATALOG_NOT_CONFIGURED__"],
-        )
-        with self.assertRaisesRegex(project_registry.ProjectPolicyError, "project is disabled"):
-            project_registry.project_for_task(ROOT, project["path"])
+        self.assertIs(project["enabled"], True)
+        self.assertNotIn("disabled_reason", project)
+        self.assertEqual(project["code_required_checks"], ["npm test"])
+        self.assertIn("npm test", claude_runner.ALLOWED_COMMANDS)
+        self.assertNotIn("package.json", project["allowed_scope"])
+        self.assertNotIn("control-center-verify.mjs", project["allowed_scope"])
+        self.assertIn("package.json", project["forbidden_scope"])
+        self.assertIn("control-center-verify.mjs", project["forbidden_scope"])
+        resolved = project_registry.project_for_task(ROOT, project["path"])
+        self.assertEqual(resolved["project_id"], "resort-os")
 
     def test_ak_bermet_registry_contains_no_removed_hold_tests(self):
         checks = self.by_id["ak-bermet"]["code_required_checks"]
