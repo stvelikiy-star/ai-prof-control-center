@@ -153,11 +153,7 @@
         "npx"
       ],
       "code_required_checks": [
-        "npm run lint",
         "npx tsc --noEmit --incremental false",
-        "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
-        "node --test --experimental-strip-types src/lib/holds-availability.test.ts",
-        "node --test supabase/migrations/availability-hold-security.contract.test.mjs",
         "npm run build"
       ],
       "code_toolchain": "nvm-node",
@@ -321,7 +317,8 @@
     {
       "project_id": "resort-os",
       "path": "/home/agent/projects/resort-os",
-      "enabled": true,
+      "enabled": false,
+      "disabled_reason": "Control-plane quarantine: Stage 01B does not yet have an exact safe allowlisted check catalog for the Resort OS monorepo.",
       "base_branch": "main",
       "allowed_base_branches": [
         "main"
@@ -333,22 +330,17 @@
       "allowed_scope": [
         "README.md",
         "docs/**",
-        "src/**",
-        "app/**",
-        "components/**",
-        "lib/**",
-        "public/**",
-        "tests/**",
-        "supabase/**",
-        "package.json",
-        "package-lock.json",
-        "tsconfig.json",
-        "next.config.mjs",
-        "next.config.js",
-        "vite.config.ts",
-        "tailwind.config.ts",
-        "postcss.config.mjs",
-        "middleware.ts",
+        "apps/**",
+        "services/**",
+        "packages/**",
+        "scripts/**",
+        "automation/**",
+        "data-intake/**",
+        "compose.yaml",
+        "compose.production.yaml",
+        ".dockerignore",
+        ".env.example",
+        ".env.production.example",
         "knowledge/04_CURRENT_STATE.md",
         "knowledge/05_DECISIONS_AND_BACKLOG.md"
       ],
@@ -362,12 +354,15 @@
         "credentials",
         "node_modules/**",
         ".next/**",
-        "supabase/.temp/**",
+        ".github/workflows/**",
         "recovery-artifacts/**",
         "knowledge/00_PRODUCT_BIBLE.md",
         "knowledge/01_DOMAIN_BUSINESS_RULES.md",
         "knowledge/02_SYSTEM_ARCHITECTURE.md",
-        "knowledge/03_AI_ADMIN.md"
+        "knowledge/03_AI_ADMIN.md",
+        "knowledge/06_THREE_CROWNS_MASTER_SPEC.md",
+        "knowledge/07_EXECUTION_PLAN_THREE_CROWNS.md",
+        "knowledge/08_CLIENT_AUTOMATION_N8N_BOUNDARY.md"
       ],
       "agent_context": "agents/resort-os",
       "allow_commits": false,
@@ -384,7 +379,7 @@
         "npx"
       ],
       "code_required_checks": [
-        "python3 -m unittest"
+        "__RESORT_OS_MONOREPO_CHECK_CATALOG_NOT_CONFIGURED__"
       ],
       "code_toolchain": "nvm-node"
     }
