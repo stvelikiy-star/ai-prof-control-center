@@ -3,9 +3,9 @@ name: Control Center CI
 on:
   push:
     branches:
-      - fix/control-center-local-migration-campaign-guard
-      - feature/self-maintenance-v1
-      - feature/self-maintenance-v1-main
+      - main
+      - 'fix/**'
+      - 'feature/**'
   pull_request:
     branches:
       - main
@@ -13,6 +13,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: control-center-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -57,6 +61,7 @@ jobs:
           make_repo /home/agent/projects/ak-bermet main
           make_repo /home/agent/projects/ai-prof-control-center-maintenance maintenance/base
           make_repo "/home/agent/Загрузки/kol-travel-platform" main
+          make_repo /home/agent/projects/resort-os main
 
           mkdir -p /home/agent/projects/ai-prof-control-center-maintenance/orchestrator
           printf '# telegram fixture\n' > /home/agent/projects/ai-prof-control-center-maintenance/orchestrator/telegram_bridge.py
@@ -88,6 +93,17 @@ jobs:
           JSON
           git -C "/home/agent/Загрузки/kol-travel-platform" add package.json
           git -C "/home/agent/Загрузки/kol-travel-platform" commit -q -m 'add KOL package fixture'
+
+          mkdir -p \
+            /home/agent/projects/resort-os/apps/admin \
+            /home/agent/projects/resort-os/apps/web \
+            /home/agent/projects/resort-os/apps/staff \
+            /home/agent/projects/resort-os/services/api \
+            /home/agent/projects/resort-os/packages/database \
+            /home/agent/projects/resort-os/scripts \
+            /home/agent/projects/resort-os/automation/n8n \
+            /home/agent/projects/resort-os/data-intake \
+            /home/agent/projects/resort-os/knowledge
 
       - name: Python syntax check
         run: |
