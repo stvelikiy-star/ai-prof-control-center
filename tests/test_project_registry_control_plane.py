@@ -68,7 +68,12 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         self.assertNotIn("availability-hold-security.contract.test.mjs", joined)
         self.assertEqual(
             checks,
-            ["npx tsc --noEmit --incremental false", "npm run build"],
+            [
+                "npm run lint",
+                "npx tsc --noEmit --incremental false",
+                "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
+                "npm run build",
+            ],
         )
 
     def test_control_center_ci_covers_main_and_general_work_branches(self):
