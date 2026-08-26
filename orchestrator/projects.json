@@ -319,8 +319,7 @@
     {
       "project_id": "resort-os",
       "path": "/home/agent/projects/resort-os",
-      "enabled": false,
-      "disabled_reason": "Control-plane quarantine: Stage 01B does not yet have an exact safe allowlisted check catalog for the Resort OS monorepo.",
+      "enabled": true,
       "base_branch": "main",
       "allowed_base_branches": [
         "main"
@@ -357,6 +356,8 @@
         "node_modules/**",
         ".next/**",
         ".github/workflows/**",
+        "package.json",
+        "control-center-verify.mjs",
         "recovery-artifacts/**",
         "knowledge/00_PRODUCT_BIBLE.md",
         "knowledge/01_DOMAIN_BUSINESS_RULES.md",
@@ -381,7 +382,7 @@
         "npx"
       ],
       "code_required_checks": [
-        "__RESORT_OS_MONOREPO_CHECK_CATALOG_NOT_CONFIGURED__"
+        "npm test"
       ],
       "code_toolchain": "nvm-node"
     }
