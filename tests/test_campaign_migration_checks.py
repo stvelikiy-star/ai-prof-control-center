@@ -13,64 +13,46 @@ sys.path.insert(0, str(ROOT / "orchestrator"))
 import claude_runner
 
 
-HOLD_CHECK = (
+LEGACY_HOLD_CHECK = (
     "node --test --experimental-strip-types "
     "src/lib/holds-availability.test.ts"
 )
 
-MIGRATION_CHECK = (
+LEGACY_MIGRATION_CHECK = (
     "node --test "
     "supabase/migrations/availability-hold-security.contract.test.mjs"
 )
 
+CURRENT_CHECKS = [
+    "npx tsc --noEmit --incremental false",
+    "npm run build",
+]
+
 
 class CampaignMigrationChecksTests(unittest.TestCase):
-    def test_exact_hold_check_is_allowlisted(self):
-        self.assertEqual(
-            claude_runner.ALLOWED_COMMANDS[HOLD_CHECK],
-            [
-                "node",
-                "--test",
-                "--experimental-strip-types",
-                "src/lib/holds-availability.test.ts",
-            ],
-        )
-
-    def test_exact_migration_contract_check_is_allowlisted(self):
-        self.assertEqual(
-            claude_runner.ALLOWED_COMMANDS[MIGRATION_CHECK],
-            [
-                "node",
-                "--test",
-                "supabase/migrations/"
-                "availability-hold-security.contract.test.mjs",
-            ],
-        )
-
-    def test_ak_bermet_campaign_requires_both_checks(self):
+    def _ak_bermet_project(self):
         registry = json.loads(
-            (ROOT / "orchestrator/projects.json").read_text(
-                encoding="utf-8"
-            )
+            (ROOT / "orchestrator/projects.json").read_text(encoding="utf-8")
         )
-
-        project = next(
+        return next(
             item
             for item in registry["projects"]
             if item["project_id"] == "ak-bermet"
         )
 
-        checks = project["code_required_checks"]
+    def test_removed_hold_contracts_are_not_required_by_current_registry(self):
+        checks = self._ak_bermet_project()["code_required_checks"]
+        self.assertNotIn(LEGACY_HOLD_CHECK, checks)
+        self.assertNotIn(LEGACY_MIGRATION_CHECK, checks)
 
-        self.assertIn(HOLD_CHECK, checks)
-        self.assertIn(MIGRATION_CHECK, checks)
+    def test_ak_bermet_current_checks_are_exact_and_ordered(self):
+        checks = self._ak_bermet_project()["code_required_checks"]
+        self.assertEqual(checks, CURRENT_CHECKS)
 
-        self.assertLess(
-            checks.index(HOLD_CHECK),
-            checks.index(MIGRATION_CHECK),
-        )
-
-        self.assertEqual(checks[-1], "npm run build")
+    def test_every_current_ak_bermet_check_is_stage01b_allowlisted(self):
+        for check in CURRENT_CHECKS:
+            with self.subTest(check=check):
+                self.assertIn(check, claude_runner.ALLOWED_COMMANDS)
 
 
 if __name__ == "__main__":
