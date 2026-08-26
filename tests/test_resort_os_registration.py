@@ -16,8 +16,8 @@ class ResortOsRegistrationTests(unittest.TestCase):
 
     def test_identity_and_branch_contract(self):
         self.assertEqual(self.project["path"], "/home/agent/projects/resort-os")
-        self.assertIs(self.project["enabled"], False)
-        self.assertIn("quarantine", self.project["disabled_reason"].lower())
+        self.assertIs(self.project["enabled"], True)
+        self.assertNotIn("disabled_reason", self.project)
         self.assertEqual(self.project["base_branch"], "main")
         self.assertEqual(self.project["allowed_base_branches"], ["main"])
         self.assertEqual(self.project["agent_context"], "agents/resort-os")
@@ -45,7 +45,7 @@ class ResortOsRegistrationTests(unittest.TestCase):
         for stale in ("src/**", "app/**", "components/**", "lib/**", "supabase/**"):
             self.assertNotIn(stale, allowed)
 
-    def test_canonical_and_recovery_boundaries(self):
+    def test_canonical_recovery_and_verification_boundaries(self):
         allowed = set(self.project["allowed_scope"])
         forbidden = set(self.project["forbidden_scope"])
 
@@ -62,6 +62,8 @@ class ResortOsRegistrationTests(unittest.TestCase):
             "knowledge/08_CLIENT_AUTOMATION_N8N_BOUNDARY.md",
             "recovery-artifacts/**",
             ".github/workflows/**",
+            "package.json",
+            "control-center-verify.mjs",
         ):
             self.assertIn(path, forbidden)
             self.assertNotIn(path, allowed)
@@ -77,12 +79,10 @@ class ResortOsRegistrationTests(unittest.TestCase):
         for name in required:
             self.assertTrue((AGENT / name).is_file(), name)
 
-    def test_quarantine_check_is_deliberately_unexecutable(self):
-        self.assertEqual(
-            self.project["code_required_checks"],
-            ["__RESORT_OS_MONOREPO_CHECK_CATALOG_NOT_CONFIGURED__"],
-        )
+    def test_repository_owned_check_is_exact_and_minimal(self):
+        self.assertEqual(self.project["code_required_checks"], ["npm test"])
         self.assertIn("python3", self.project["code_required_commands"])
+        self.assertIn("node", self.project["code_required_commands"])
         self.assertIn("npm", self.project["code_required_commands"])
 
 

@@ -1,36 +1,61 @@
 # RESORT OS — STATE
 
-Date: 2026-08-22
+Date: 2026-08-26
 
 ## VERIFIED / PASS
 
 - Private GitHub repository: `stvelikiy-star/resort-os`.
-- Local project path: `/home/agent/projects/resort-os`.
+- Local project path contract: `/home/agent/projects/resort-os`.
 - Baseline branch: `main`.
-- Bootstrap commit supplied by owner terminal evidence: `ff0ce992adcb502f9920039c9c9ae5db7b33fc1b`.
-- Six canonical Knowledge files were copied byte-for-byte and verified against the frozen bootstrap SHA256 set during local bootstrap.
-- Local repository was clean immediately after bootstrap and push.
-- Recovered artifact `recovery-artifacts/pms-grid/PMSGrid.tsx` has SHA256 `b2249cb6f65a7fdf6c889f68a65b9ea3a409e0b77a44a11b3bc7befb26737dfc`.
+- Three Crowns clean-database migration baseline gate was merged and proven on clean PostgreSQL.
+- Canonical repository contains Admin, Public Web, Staff, Resort Core/API, database/migration, PMS, booking and payment-domain implementation surfaces.
+- Resort Core CI has exercised schema setup, application typecheck/build, Core compilation, seed, availability/request flow, auth/PMS, quote, manual-payment reservation flow, idempotency, PMS reflection, and check-in/checkout/housekeeping lifecycle.
+- Public-site recovery was merged after removing unverified public amenity claims and preserving Resort Core availability/pricing plus the ReservationRequest boundary.
+- Repository-owned AI PROF Stage 01B verification is `npm test` from the repository root.
+- The root verification contract typechecks and builds Admin/Public/Staff and compiles Core/scripts Python.
+- The trusted root verifier checks exact Git blob identities of all three app `package.json` manifests before executing their scripts and fails closed on manifest drift.
+- The verification gate and trusted runner are outside ordinary AI PROF Resort OS task scope.
+- Normal AI PROF Resort OS tasks retain no commit, push, merge, deployment, secret, production, or destructive database authority.
 
 ## CURRENT IMPLEMENTATION REALITY
 
-The repository is a clean bootstrap baseline. A complete previous Guest House / Resort OS application was not recovered from the inspected local sources.
+Resort OS is no longer only a clean bootstrap baseline. A substantial canonical implementation is present and has repository-level test/build evidence.
 
-No production PMS backend, database schema, live booking engine, live `/api/v1/pms/grid`, payment integration, deployment, or production environment is currently proven by this repository baseline.
+This evidence does **not** by itself prove a live production deployment, a production database cutover, a live payment provider, or production guest traffic. Those statuses remain separate gates and must not be inferred from CI.
 
-The recovered PMS grid is a self-contained mock UI artifact only.
+Current repository behavior must preserve:
+
+- Reservation Request / Pending Draft -> Check / Calculation -> Human Confirmation -> Confirmed Reservation;
+- human final reservation confirmation;
+- `AI_PERMISSION <= CURRENT_USER_PERMISSION`;
+- controlled domain/API tools rather than unrestricted production DB access;
+- deterministic critical business logic outside the LLM;
+- fail-closed verification and idempotency boundaries.
 
 ## VALIDATE / UNKNOWN
 
-- Exact application stack for the new core beyond canonical architectural constraints.
-- Exact V1 scope.
-- First ICP validation.
-- Database implementation and migrations.
-- Auth/RBAC implementation.
-- PMS domain/API implementation.
-- Deployment target and production environment.
-- Payment provider/legal implementation route.
+Unless independently evidenced by current production/runtime inspection:
+
+- production deployment target and live deployment status;
+- production database migration/cutover state;
+- payment provider and legal activation route;
+- live external-channel integrations;
+- exact V1 product scope where canonical Knowledge still marks it `VALIDATE`;
+- first ICP validation;
+- any production SLA/traffic/financial claim not directly evidenced.
+
+## AI PROF EXECUTION STATUS
+
+The previous monorepo-check quarantine has a verified repository-owned replacement: root `npm test`.
+
+Control Center may enable bounded Resort OS code tasks only with this exact required check and existing fail-closed scope/branch/authority controls. A stale local clone that does not contain the root verification contract must fail rather than silently substitute another check; synchronize the local `main` before the first Resort OS code task.
 
 ## NEXT SAFE MILESTONE
 
-Register `resort-os` in AI PROF with minimum authority, then run a bounded documentation/bootstrap audit before any broad implementation task. The first implementation work must be derived from the canonical Current State/GAP rather than assumptions.
+After Control Center registry enablement is merged and its own CI is green:
+
+1. synchronize the local Resort OS clone to the verified canonical `main`;
+2. start only bounded gap-driven tasks;
+3. require root `npm test` for every code task;
+4. keep production deployment, DB mutation, payment activation, secrets, and irreversible operations behind explicit owner gates;
+5. update canonical `knowledge/04_CURRENT_STATE.md` only from verified implementation/runtime evidence.
