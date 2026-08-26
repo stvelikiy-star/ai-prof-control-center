@@ -84,13 +84,11 @@ class SubmitTaskTests(unittest.TestCase):
             "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
             "node --test --experimental-strip-types "
             "src/lib/inspection-rules.test.ts, "
-            "node --test --experimental-strip-types "
-            "src/lib/holds-availability.test.ts, "
-            "node --test "
-            "supabase/migrations/availability-hold-security.contract.test.mjs, "
             "npm run build",
             text,
         )
+        self.assertNotIn("holds-availability.test.ts", text)
+        self.assertNotIn("availability-hold-security.contract.test.mjs", text)
         self.assertNotIn("npm test", text)
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 
