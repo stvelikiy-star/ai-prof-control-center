@@ -16,7 +16,8 @@ class ResortOsRegistrationTests(unittest.TestCase):
 
     def test_identity_and_branch_contract(self):
         self.assertEqual(self.project["path"], "/home/agent/projects/resort-os")
-        self.assertTrue(self.project["enabled"])
+        self.assertIs(self.project["enabled"], False)
+        self.assertIn("quarantine", self.project["disabled_reason"].lower())
         self.assertEqual(self.project["base_branch"], "main")
         self.assertEqual(self.project["allowed_base_branches"], ["main"])
         self.assertEqual(self.project["agent_context"], "agents/resort-os")
@@ -26,6 +27,23 @@ class ResortOsRegistrationTests(unittest.TestCase):
             self.assertIs(self.project[key], False, key)
         self.assertTrue(self.project["require_clean_repository"])
         self.assertLessEqual(self.project["max_scope_files"], 20)
+
+    def test_monorepo_scope_matches_real_repository_shape(self):
+        allowed = set(self.project["allowed_scope"])
+        for path in (
+            "apps/**",
+            "services/**",
+            "packages/**",
+            "scripts/**",
+            "automation/**",
+            "data-intake/**",
+            "compose.yaml",
+            "compose.production.yaml",
+        ):
+            self.assertIn(path, allowed)
+
+        for stale in ("src/**", "app/**", "components/**", "lib/**", "supabase/**"):
+            self.assertNotIn(stale, allowed)
 
     def test_canonical_and_recovery_boundaries(self):
         allowed = set(self.project["allowed_scope"])
@@ -39,7 +57,11 @@ class ResortOsRegistrationTests(unittest.TestCase):
             "knowledge/01_DOMAIN_BUSINESS_RULES.md",
             "knowledge/02_SYSTEM_ARCHITECTURE.md",
             "knowledge/03_AI_ADMIN.md",
+            "knowledge/06_THREE_CROWNS_MASTER_SPEC.md",
+            "knowledge/07_EXECUTION_PLAN_THREE_CROWNS.md",
+            "knowledge/08_CLIENT_AUTOMATION_N8N_BOUNDARY.md",
             "recovery-artifacts/**",
+            ".github/workflows/**",
         ):
             self.assertIn(path, forbidden)
             self.assertNotIn(path, allowed)
@@ -55,9 +77,13 @@ class ResortOsRegistrationTests(unittest.TestCase):
         for name in required:
             self.assertTrue((AGENT / name).is_file(), name)
 
-    def test_initial_check_is_non_production(self):
-        self.assertEqual(self.project["code_required_checks"], ["python3 -m unittest"])
+    def test_quarantine_check_is_deliberately_unexecutable(self):
+        self.assertEqual(
+            self.project["code_required_checks"],
+            ["__RESORT_OS_MONOREPO_CHECK_CATALOG_NOT_CONFIGURED__"],
+        )
         self.assertIn("python3", self.project["code_required_commands"])
+        self.assertIn("npm", self.project["code_required_commands"])
 
 
 if __name__ == "__main__":

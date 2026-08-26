@@ -32,6 +32,14 @@ def local_integration_branches(project: dict) -> tuple[str, ...]:
     return tuple(raw)
 
 
+def project_enabled(project: dict) -> bool:
+    """Return the explicit project execution state, failing closed on bad values."""
+    raw = project.get("enabled", True)
+    if not isinstance(raw, bool):
+        raise ProjectPolicyError("invalid enabled flag")
+    return raw
+
+
 def load_projects(root: Path) -> dict[str, dict]:
     try:
         payload = json.loads((root / "orchestrator/projects.json").read_text(encoding="utf-8"))
@@ -43,9 +51,13 @@ def load_projects(root: Path) -> dict[str, dict]:
     for project in payload["projects"]:
         if not isinstance(project, dict) or not isinstance(project.get("project_id"), str):
             raise ProjectPolicyError("invalid project registry entry")
+        project_id = project["project_id"]
+        if project_id in projects:
+            raise ProjectPolicyError(f"duplicate project_id: {project_id}")
         allowed_base_branches(project)
         local_integration_branches(project)
-        projects[project["project_id"]] = project
+        project_enabled(project)
+        projects[project_id] = project
     return projects
 
 
@@ -56,7 +68,10 @@ def project_for_task(root: Path, project_path: str) -> dict:
     ]
     if len(matches) != 1:
         raise ProjectPolicyError("task project is not uniquely registered")
-    return matches[0]
+    project = matches[0]
+    if not project_enabled(project):
+        raise ProjectPolicyError("project is disabled")
+    return project
 
 
 def validate_task_base_branch(root: Path, project_path: str, branch: str) -> dict:
