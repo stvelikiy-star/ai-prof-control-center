@@ -4,8 +4,8 @@
 Mobile Control runs Telegram as its own dedicated service. This runtime adapter
 inserts project-specific post-audit routes before and after the normal Stage 01
 pipeline. The established KOL and AK BERMET publishers retain their existing
-behavior. The AI PROF self-maintenance route is a denial-only authority gate:
-it can report OWNER_ACTION_REQUIRED but cannot publish or mutate any state.
+behavior, Resort OS receives the same bounded approved-task PR publication
+route, and AI PROF self-maintenance remains commit-only.
 
 The service also upgrades the normal Stage 01B Codex command to the V2 adapter,
 which preserves the hardened runner while fixing directory-scope instructions
@@ -262,8 +262,13 @@ def _commands_with_ai_prof_publisher_gate(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
-    """Add the commit-only AI PROF gate without changing legacy composition."""
+    """Add Resort OS PR publication and the commit-only AI PROF gate."""
     established = _commands_with_publishers(root, runtime)
+    resort_os_publisher = _publisher_argv(
+        root,
+        runtime,
+        "resort_os_approved_task_publisher_gate.py",
+    )
     ai_prof_publisher_gate = _publisher_argv(
         root,
         runtime,
@@ -273,9 +278,11 @@ def _commands_with_ai_prof_publisher_gate(
     post_start = len(established) - 2
     return [
         *established[:pre_end],
+        ("resort_os_approved_publisher_pre", resort_os_publisher),
         ("ai_prof_approved_publisher_pre", ai_prof_publisher_gate),
         *established[pre_end:post_start],
         *established[post_start:],
+        ("resort_os_approved_publisher_post", resort_os_publisher),
         ("ai_prof_approved_publisher_post", ai_prof_publisher_gate),
     ]
 
