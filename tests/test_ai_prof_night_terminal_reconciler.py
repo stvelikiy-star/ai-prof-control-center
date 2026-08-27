@@ -126,7 +126,76 @@ class AIProfNightTerminalReconcilerTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue(moved.is_file())
 
-    def test_night_service_replaces_only_ai_prof_gate_binding(self):
+    def test_single_flight_guard_detects_maintenance_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            review = runtime / "queue/review"
+            review.mkdir(parents=True)
+            (review / "TASK.md").write_text(
+                "Execution-Mode: code\n"
+                f"Project-Path: {night_service.MAINTENANCE_PROJECT_PATH}\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(night_service._maintenance_code_task_in_flight(runtime))
+
+    def test_single_flight_guard_ignores_other_project_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            review = runtime / "queue/review"
+            review.mkdir(parents=True)
+            (review / "TASK.md").write_text(
+                "Execution-Mode: code\n"
+                "Project-Path: /home/agent/projects/other\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(night_service._maintenance_code_task_in_flight(runtime))
+
+    def test_night_service_replaces_gate_and_skips_stage01a_during_maintenance_flight(self):
+        root = Path("/repo")
+        established = [
+            ("kol_approved_publisher_pre", ["kol-pre"]),
+            ("ak_bermet_approved_publisher_pre", ["ak-pre"]),
+            ("operations", ["operations"]),
+            ("stage_01a", ["stage-01a"]),
+            ("codex", ["codex"]),
+            ("kol_approved_publisher_post", ["kol-post"]),
+            ("ak_bermet_approved_publisher_post", ["ak-post"]),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            review = runtime / "queue/review"
+            review.mkdir(parents=True)
+            (review / "TASK.md").write_text(
+                "Execution-Mode: code\n"
+                f"Project-Path: {night_service.MAINTENANCE_PROJECT_PATH}\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                night_service.base,
+                "_commands_with_publishers",
+                return_value=established,
+            ), mock.patch.object(
+                night_service.base,
+                "_publisher_argv",
+                return_value=["python", "ai_prof_approved_task_publisher_gate_v2.py"],
+            ) as argv:
+                commands = night_service._commands_with_night_safe_ai_prof_gate(root, runtime)
+
+        argv.assert_called_once_with(
+            root,
+            runtime,
+            "ai_prof_approved_task_publisher_gate_v2.py",
+        )
+        stages = [stage for stage, _ in commands]
+        self.assertNotIn("stage_01a", stages)
+        self.assertIn("operations", stages)
+        self.assertIn("codex", stages)
+        self.assertEqual(stages[0], "kol_approved_publisher_pre")
+        self.assertEqual(stages[1], "ak_bermet_approved_publisher_pre")
+        self.assertEqual(stages[2], "ai_prof_approved_publisher_pre")
+        self.assertEqual(stages[-1], "ai_prof_approved_publisher_post")
+
+    def test_night_service_keeps_stage01a_when_no_maintenance_task_in_flight(self):
         root = Path("/repo")
         runtime = Path("/state")
         established = [
@@ -153,12 +222,10 @@ class AIProfNightTerminalReconcilerTests(unittest.TestCase):
             runtime,
             "ai_prof_approved_task_publisher_gate_v2.py",
         )
-        self.assertEqual(commands[0], established[0])
-        self.assertEqual(commands[1], established[1])
-        self.assertEqual(commands[2][0], "ai_prof_approved_publisher_pre")
-        self.assertEqual(commands[-1][0], "ai_prof_approved_publisher_post")
+        stages = [stage for stage, _ in commands]
+        self.assertIn("stage_01a", stages)
         self.assertEqual(
-            sum(1 for stage, _ in commands if stage.startswith("ai_prof_approved_publisher_")),
+            sum(1 for stage in stages if stage.startswith("ai_prof_approved_publisher_")),
             2,
         )
 
