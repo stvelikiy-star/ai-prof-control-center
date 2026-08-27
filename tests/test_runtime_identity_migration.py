@@ -31,7 +31,9 @@ class RuntimeIdentityTests(unittest.TestCase):
 
     def test_control_center_uses_dedicated_telegram_surface(self):
         unit = (ROOT / "systemd/ai-prof-control-center.service").read_text(encoding="utf-8")
-        self.assertIn("orchestrator/control_loop_service.py --daemon", unit)
+        self.assertIn("orchestrator/control_loop_service_night.py --daemon", unit)
+        night_wrapper = (ROOT / "orchestrator/control_loop_service_night.py").read_text(encoding="utf-8")
+        self.assertIn("ai_prof_approved_task_publisher_gate_v2.py", night_wrapper)
         wrapper = (ROOT / "orchestrator/control_loop_service.py").read_text(encoding="utf-8")
         self.assertIn(
             "control_loop.supervise_telegram_bridge = _dedicated_telegram_service_only",
