@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Night-safe Control Center entrypoint.
 
-This wrapper adds two bounded reliability changes while preserving all existing
+This wrapper adds bounded reliability changes while preserving all existing
 project publishers and the dedicated Telegram runtime identity:
 
 1. AI PROF self-maintenance uses the terminal commit reconciler V2.
@@ -9,11 +9,15 @@ project publishers and the dedicated Telegram runtime identity:
    pending Codex audit, a new generic Stage 01A code task is not started. This
    prevents another task from stealing the single maintenance checkout before
    the current task reaches its terminal state.
+3. Heartbeat writes always refresh the supervisor PID after loading historical
+   heartbeat fields, so a service restart cannot keep reporting a stale PID.
 
 No push, merge, deploy, database, secret, or destructive authority is added.
 """
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 try:  # Package import under tests.
@@ -64,6 +68,32 @@ def _maintenance_code_task_in_flight(runtime: Path) -> bool:
     return False
 
 
+def _night_write_heartbeat(paths, **updates) -> None:
+    """Preserve heartbeat state while always refreshing process identity."""
+    control = base.control_loop
+    state = {
+        "timestamp": control.utc_now(),
+        "pid": os.getpid(),
+        "state": "idle",
+        "stage": None,
+        "last_result": None,
+        "consecutive_failures": 0,
+    }
+    try:
+        loaded = json.loads(paths.heartbeat.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            state.update(loaded)
+    except (OSError, ValueError):
+        pass
+    state.update(updates)
+    state["pid"] = os.getpid()
+    state["timestamp"] = control.utc_now()
+    control.atomic_write(
+        paths.heartbeat,
+        json.dumps(state, sort_keys=True) + "\n",
+    )
+
+
 def _commands_with_night_safe_ai_prof_gate(
     root: Path,
     runtime: Path,
@@ -93,6 +123,7 @@ def _commands_with_night_safe_ai_prof_gate(
 
 
 def main() -> int:
+    base.control_loop.write_heartbeat = _night_write_heartbeat
     base._commands_with_ai_prof_publisher_gate = _commands_with_night_safe_ai_prof_gate
     return base.main()
 
