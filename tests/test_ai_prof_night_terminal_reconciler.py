@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -149,6 +150,40 @@ class AIProfNightTerminalReconcilerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertFalse(night_service._maintenance_code_task_in_flight(runtime))
+
+    def test_night_heartbeat_replaces_stale_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            heartbeat = Path(tmp) / "heartbeat.json"
+            heartbeat.write_text(
+                json.dumps(
+                    {
+                        "pid": 1723511,
+                        "state": "idle",
+                        "stage": None,
+                        "timestamp": "old",
+                        "consecutive_failures": 0,
+                    }
+                ) + "\n",
+                encoding="utf-8",
+            )
+            paths = mock.Mock()
+            paths.heartbeat = heartbeat
+            with mock.patch.object(night_service.os, "getpid", return_value=113359), \
+                 mock.patch.object(
+                     night_service.base.control_loop,
+                     "utc_now",
+                     return_value="2026-08-27T14:53:29+00:00",
+                 ):
+                night_service._night_write_heartbeat(
+                    paths,
+                    state="running",
+                    stage="operations",
+                )
+            payload = json.loads(heartbeat.read_text(encoding="utf-8"))
+            self.assertEqual(payload["pid"], 113359)
+            self.assertEqual(payload["state"], "running")
+            self.assertEqual(payload["stage"], "operations")
+            self.assertEqual(payload["timestamp"], "2026-08-27T14:53:29+00:00")
 
     def test_night_service_replaces_gate_and_skips_stage01a_during_maintenance_flight(self):
         root = Path("/repo")
