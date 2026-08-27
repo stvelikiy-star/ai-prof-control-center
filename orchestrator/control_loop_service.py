@@ -5,7 +5,8 @@ Mobile Control runs Telegram as its own dedicated service. This runtime adapter
 inserts project-specific post-audit routes before and after the normal Stage 01
 pipeline. The established KOL and AK BERMET publishers retain their existing
 behavior, Resort OS receives the same bounded approved-task PR publication
-route, and AI PROF self-maintenance remains commit-only.
+route when its reviewed adapter exists, and AI PROF self-maintenance remains
+commit-only.
 
 The service also upgrades the normal Stage 01B Codex command to the V2 adapter,
 which preserves the hardened runner while fixing directory-scope instructions
@@ -76,15 +77,13 @@ def run_lifecycle_shadow(
 ) -> OrchestrationSnapshot:
     """Run injected EXECUTE/TEST/AUDIT adapters as a finite shadow lifecycle.
 
-    Requests contain immutable identity data and prior evidence only.  This
+    Requests contain immutable identity data and prior evidence only. This
     service supplies no commands, paths, queue handles, publication callbacks,
-    or repository capability.  Adapter errors and malformed evidence terminate
+    or repository capability. Adapter errors and malformed evidence terminate
     the shadow fail-closed and never change the normal control-loop result.
     """
 
     snapshot = start_orchestration(binding, budget)
-    # Each fix consumes budget before returning to EXECUTE.  The additional
-    # constant covers the initial EXECUTE/TEST/AUDIT sequence.
     maximum_stage_calls = 3 * (budget.max_fix_attempts + 1)
     stage_calls = 0
     while snapshot.state not in (
@@ -114,8 +113,6 @@ def run_lifecycle_shadow(
                 returned = adapter.audit(request)
             snapshot = apply_stage_evidence(snapshot, returned)
         except Exception:
-            # Exception text may contain paths, task prose, or runner output;
-            # retain only the bounded stage classification in shadow evidence.
             return fail_orchestration(
                 snapshot, f"{stage.value.upper()} adapter exception or invalid evidence"
             )
@@ -129,15 +126,7 @@ def _text_or_none(value: object) -> str | None:
 def _shadow_observation(
     paths: control_loop.ControlPaths,
 ) -> ControlShadowObservation:
-    """Read existing runtime artifacts without invoking mutating status probes.
-
-    ``control_loop.status`` tests the supervisor lock by opening it in a mode
-    that creates the file when it is absent.  That is appropriate for the
-    control CLI, but not for a lifecycle shadow.  This reader consequently
-    uses only existence checks, directory iteration, and an existing
-    heartbeat file.  Missing artifacts describe an inactive/empty control
-    loop; malformed or unreadable artifacts fail the outer observation closed.
-    """
+    """Read existing runtime artifacts without invoking mutating status probes."""
     pause_path = Path(paths.pause)
     heartbeat_path = Path(paths.heartbeat)
     lock_path = Path(paths.lock)
@@ -183,11 +172,7 @@ def _observe_lifecycle_shadow(
     paths: control_loop.ControlPaths,
     observer: LifecycleShadowObserver | None,
 ) -> bool:
-    """Offer one non-authoritative observation, failing closed on any error.
-
-    The observer receives no paths, queue items, lifecycle objects, authority
-    bindings, or mutation callback.  Its return value is deliberately ignored.
-    """
+    """Offer one non-authoritative observation, failing closed on any error."""
     if observer is None:
         return False
     try:
@@ -262,27 +247,39 @@ def _commands_with_ai_prof_publisher_gate(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
-    """Add Resort OS PR publication and the commit-only AI PROF gate."""
+    """Add reviewed project publishers plus the commit-only AI PROF gate.
+
+    Resort OS is included only when the exact reviewed adapter exists in the
+    current Control Center checkout. This keeps old isolated unit fixtures and
+    partial maintenance checkouts backward-compatible while the real runtime
+    fails closed if the branch was only partially synchronized.
+    """
     established = _commands_with_publishers(root, runtime)
-    resort_os_publisher = _publisher_argv(
-        root,
-        runtime,
-        "resort_os_approved_task_publisher_gate.py",
-    )
     ai_prof_publisher_gate = _publisher_argv(
         root,
         runtime,
         "ai_prof_approved_task_publisher_gate.py",
     )
+    resort_script = root / "orchestrator/resort_os_approved_task_publisher_gate.py"
+    resort_os_publisher = _publisher_argv(
+        root,
+        runtime,
+        "resort_os_approved_task_publisher_gate.py",
+    )
     pre_end = 2
     post_start = len(established) - 2
+    pre_extra: list[tuple[str, list[str]]] = []
+    post_extra: list[tuple[str, list[str]]] = []
+    if resort_script.is_file() and not resort_script.is_symlink():
+        pre_extra.append(("resort_os_approved_publisher_pre", resort_os_publisher))
+        post_extra.append(("resort_os_approved_publisher_post", resort_os_publisher))
     return [
         *established[:pre_end],
-        ("resort_os_approved_publisher_pre", resort_os_publisher),
+        *pre_extra,
         ("ai_prof_approved_publisher_pre", ai_prof_publisher_gate),
         *established[pre_end:post_start],
         *established[post_start:],
-        ("resort_os_approved_publisher_post", resort_os_publisher),
+        *post_extra,
         ("ai_prof_approved_publisher_post", ai_prof_publisher_gate),
     ]
 
@@ -294,8 +291,6 @@ def main(
     lifecycle_binding: StageBinding | None = None,
     lifecycle_budget: FixLoopBudget | None = None,
 ) -> int:
-    # Slice 3 is deliberately opt-in.  A partially supplied injection is a
-    # shadow no-op and cannot affect normal runtime setup, ordering, or result.
     if (
         lifecycle_adapter is not None
         and lifecycle_binding is not None
@@ -307,9 +302,6 @@ def main(
             lifecycle_adapter,
         )
     if shadow_observer is None:
-        # Preserve the dedicated-service runtime identity on the normal path.
-        # Shadow observation is strictly opt-in and must not replace the
-        # established adapter when it has not been explicitly configured.
         control_loop.supervise_telegram_bridge = _dedicated_telegram_service_only
         control_loop.child_commands = _commands_with_ai_prof_publisher_gate
         return control_loop.main()
