@@ -7,9 +7,10 @@ from pathlib import Path
 from unittest import mock
 
 # Legacy Control Center modules use top-level sibling imports (for example
-# ``import control_loop``) when executed directly from orchestrator/.  Make the
+# ``import control_loop``) when executed directly from orchestrator/. Make the
 # test harness reproduce that canonical runtime import path explicitly instead
-# of depending on a caller-provided PYTHONPATH.
+# of depending on a caller-provided PYTHONPATH. This keeps the night-health
+# regression deterministic across fresh login shells and service environments.
 ORCHESTRATOR_DIR = Path(__file__).resolve().parents[1] / "orchestrator"
 if str(ORCHESTRATOR_DIR) not in sys.path:
     sys.path.insert(0, str(ORCHESTRATOR_DIR))
