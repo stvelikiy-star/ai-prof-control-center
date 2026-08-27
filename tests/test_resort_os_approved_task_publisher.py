@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,14 +108,21 @@ class ResortOsApprovedPublisherTests(unittest.TestCase):
                 gate._validate_publish_target(gate.RESORT_OS_PROJECT)
 
     def test_control_loop_contains_resort_os_publisher_pre_and_post(self) -> None:
-        with patch.object(
-            control_loop_service,
-            "_ORIGINAL_CHILD_COMMANDS",
-            return_value=[("normal", ["normal-command"])],
-        ):
-            commands = control_loop_service._commands_with_ai_prof_publisher_gate(
-                Path("/control"), Path("/state")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = root / "orchestrator"
+            orchestrator.mkdir()
+            (orchestrator / "resort_os_approved_task_publisher_gate.py").write_text(
+                "# reviewed fixture\n", encoding="utf-8"
             )
+            with patch.object(
+                control_loop_service,
+                "_ORIGINAL_CHILD_COMMANDS",
+                return_value=[("normal", ["normal-command"])],
+            ):
+                commands = control_loop_service._commands_with_ai_prof_publisher_gate(
+                    root, root / "state"
+                )
         stages = [stage for stage, _argv in commands]
         self.assertIn("resort_os_approved_publisher_pre", stages)
         self.assertIn("resort_os_approved_publisher_post", stages)
@@ -126,6 +134,19 @@ class ResortOsApprovedPublisherTests(unittest.TestCase):
         resort_argv = dict(commands)["resort_os_approved_publisher_pre"]
         self.assertIn("resort_os_approved_task_publisher_gate.py", resort_argv[1])
         self.assertIn("--once", resort_argv)
+
+    def test_control_loop_omits_resort_os_route_if_adapter_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            control_loop_service,
+            "_ORIGINAL_CHILD_COMMANDS",
+            return_value=[("normal", ["normal-command"])],
+        ):
+            commands = control_loop_service._commands_with_ai_prof_publisher_gate(
+                Path(tmp), Path(tmp) / "state"
+            )
+        stages = [stage for stage, _argv in commands]
+        self.assertNotIn("resort_os_approved_publisher_pre", stages)
+        self.assertNotIn("resort_os_approved_publisher_post", stages)
 
 
 if __name__ == "__main__":
