@@ -6,17 +6,17 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-# Legacy Control Center modules use top-level sibling imports (for example
-# ``import control_loop``) when executed directly from orchestrator/. Keep the
-# repository root ahead of orchestrator/ so ``orchestrator`` still resolves as
-# the package/namespace directory, then append orchestrator/ only for legacy
-# sibling imports. This avoids shadowing the package with orchestrator.py.
+# Canonical runtime executes Control Center entrypoints directly from
+# orchestrator/, where sibling imports such as ``import control_loop`` resolve
+# as top-level modules. Reproduce that exact import model in this test instead
+# of treating orchestrator/ as a package (it has no __init__.py and also
+# contains orchestrator.py, which can shadow the namespace name).
 ORCHESTRATOR_DIR = Path(__file__).resolve().parents[1] / "orchestrator"
 if str(ORCHESTRATOR_DIR) not in sys.path:
-    sys.path.append(str(ORCHESTRATOR_DIR))
+    sys.path.insert(0, str(ORCHESTRATOR_DIR))
 
-from orchestrator import control_loop_service_night as night_service
-from orchestrator import operations_runner_night as night_operations
+import control_loop_service_night as night_service
+import operations_runner_night as night_operations
 
 
 class NightHealthDiscoveryTests(unittest.TestCase):
