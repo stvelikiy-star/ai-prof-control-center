@@ -11,6 +11,8 @@ project publishers and the dedicated Telegram runtime identity:
    the current task reaches its terminal state.
 3. Heartbeat writes always refresh the supervisor PID after loading historical
    heartbeat fields, so a service restart cannot keep reporting a stale PID.
+4. The operations stage uses the night wrapper that upgrades only the legacy
+   plain ``python -m unittest`` health command to explicit full discovery.
 
 No push, merge, deploy, database, secret, or destructive authority is added.
 """
@@ -94,11 +96,29 @@ def _night_write_heartbeat(paths, **updates) -> None:
     )
 
 
+def _upgrade_operations_binding(
+    root: Path,
+    commands: list[tuple[str, list[str]]],
+) -> list[tuple[str, list[str]]]:
+    """Replace only the exact legacy operations script with night wrapper."""
+    legacy_path = str(root / "orchestrator/operations_runner.py")
+    night_path = str(root / "orchestrator/operations_runner_night.py")
+    upgraded: list[tuple[str, list[str]]] = []
+    for stage, argv in commands:
+        if stage == "operations":
+            argv = [night_path if item == legacy_path else item for item in argv]
+        upgraded.append((stage, argv))
+    return upgraded
+
+
 def _commands_with_night_safe_ai_prof_gate(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
-    established = base._commands_with_publishers(root, runtime)
+    established = _upgrade_operations_binding(
+        root,
+        base._commands_with_publishers(root, runtime),
+    )
     if _maintenance_code_task_in_flight(runtime):
         established = [
             (stage, argv)
