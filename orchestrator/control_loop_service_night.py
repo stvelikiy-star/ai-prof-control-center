@@ -5,10 +5,11 @@ This wrapper adds bounded reliability changes while preserving all existing
 project publishers and the dedicated Telegram runtime identity:
 
 1. AI PROF self-maintenance uses the terminal commit reconciler V2.
-2. While an AI PROF maintenance code task is already active, in review, or
-   pending Codex audit, a new generic Stage 01A code task is not started. This
-   prevents another task from stealing the single maintenance checkout before
-   the current task reaches its terminal state.
+2. While an AI PROF maintenance code task is already active, in review,
+   pending Codex audit, or approved but not yet terminalized, a new generic
+   Stage 01A code task is not started. This prevents another task from stealing
+   the single maintenance checkout before the current task reaches its terminal
+   state.
 3. Heartbeat writes always refresh the supervisor PID after loading historical
    heartbeat fields, so a service restart cannot keep reporting a stale PID.
 4. The operations stage uses the night wrapper that upgrades only the legacy
@@ -28,7 +29,7 @@ except ImportError:  # Direct script execution from orchestrator/.
     import control_loop_service as base  # type: ignore[no-redef]
 
 MAINTENANCE_PROJECT_PATH = "/home/agent/projects/ai-prof-control-center-maintenance"
-IN_FLIGHT_QUEUES = ("active", "review", "pending_codex")
+IN_FLIGHT_QUEUES = ("active", "review", "pending_codex", "approved")
 MAX_TASK_BYTES = 1024 * 1024
 
 
