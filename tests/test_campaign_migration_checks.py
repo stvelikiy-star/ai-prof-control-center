@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "orchestrator"))
 
-import claude_runner
+import codex_stage01b_runner_v2
 
 
 LEGACY_HOLD_CHECK = (
@@ -51,10 +51,12 @@ class CampaignMigrationChecksTests(unittest.TestCase):
         checks = self._ak_bermet_project()["code_required_checks"]
         self.assertEqual(checks, CURRENT_CHECKS)
 
-    def test_every_current_ak_bermet_check_is_stage01b_allowlisted(self):
+    def test_every_current_ak_bermet_check_is_effective_stage01b_allowlisted(self):
+        codex_stage01b_runner_v2.install_v2_required_check_allowlist()
+        effective = codex_stage01b_runner_v2.legacy.core.ALLOWED_COMMANDS
         for check in CURRENT_CHECKS:
             with self.subTest(check=check):
-                self.assertIn(check, claude_runner.ALLOWED_COMMANDS)
+                self.assertIn(check, effective)
 
 
 if __name__ == "__main__":
