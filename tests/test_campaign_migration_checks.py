@@ -26,7 +26,7 @@ LEGACY_MIGRATION_CHECK = (
 CURRENT_CHECKS = [
     "npm run lint",
     "npx tsc --noEmit --incremental false",
-    "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
+    "npm run test:inspection",
     "npm run build",
 ]
 
