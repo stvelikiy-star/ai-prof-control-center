@@ -17,7 +17,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply repair script
-        run: python3 .github/repair_stage01b_dirty_chain.py
+        run: |
+          set -euo pipefail
+          python3 .github/repair_stage01b_dirty_chain.py
+          python3 .github/fix_stage01b_order.py
 
       - name: Validate focused regression
         run: |
@@ -50,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/repair_stage01b_dirty_chain.py
+          rm .github/fix_stage01b_order.py
           rm .github/workflows/stage01b-dirty-chain-repair-v2.yml
           git config user.name "ai-prof-repair-bot"
           git config user.email "actions@users.noreply.github.com"
