@@ -82,13 +82,12 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
         self.assertIn(
             "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
-            "node --test --experimental-strip-types "
-            "src/lib/inspection-rules.test.ts, "
-            "npm run build",
+            "npm run test:inspection, npm run build",
             text,
         )
         self.assertNotIn("holds-availability.test.ts", text)
         self.assertNotIn("availability-hold-security.contract.test.mjs", text)
+        self.assertNotIn("node --test --experimental-strip-types src/lib/inspection-rules.test.ts", text)
         self.assertNotIn("npm test", text)
         self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 
