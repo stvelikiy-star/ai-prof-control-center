@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from orchestrator import control_loop_service_night as night_service
+# Canonical runtime executes Control Center entrypoints directly from
+# orchestrator/, where sibling imports such as ``import control_loop`` resolve
+# as top-level modules. Reproduce that exact import model in this regression
+# test so direct-file CI execution matches the real Night Watch runtime.
+ORCHESTRATOR_DIR = Path(__file__).resolve().parents[1] / "orchestrator"
+if str(ORCHESTRATOR_DIR) not in sys.path:
+    sys.path.insert(0, str(ORCHESTRATOR_DIR))
+
+import control_loop_service_night as night_service
 
 
 class NightSingleFlightApprovedTests(unittest.TestCase):
