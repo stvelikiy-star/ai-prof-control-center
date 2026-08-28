@@ -92,7 +92,7 @@ class ControlLoopTests(unittest.TestCase):
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
             self.assertEqual(
                 seen,
-                ["operations", "stage_01a", "auto_repair", "codex_stage_01b", "codex"],
+                ["auto_repair_pre", "operations", "stage_01a", "codex_stage_01b", "auto_repair_post", "codex"],
             )
             self.assertEqual(maximum, 1)
 
@@ -106,9 +106,9 @@ class ControlLoopTests(unittest.TestCase):
     def test_task_failure_continues_pipeline(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = loop.build_paths(Path(tmp))
-            with mock.patch.object(loop, "run_child", side_effect=[1, 1, 1, 1, 0]) as run:
+            with mock.patch.object(loop, "run_child", side_effect=[1, 1, 1, 1, 1, 0]) as run:
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 6)
 
     def test_slice1_does_not_add_publisher_pr_or_merge_route(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,7 +123,7 @@ class ControlLoopTests(unittest.TestCase):
                 self.assertEqual(loop.run_cycle(paths, 1), 0)
             self.assertEqual(
                 stages,
-                ["operations", "stage_01a", "auto_repair", "codex_stage_01b", "codex"],
+                ["auto_repair_pre", "operations", "stage_01a", "codex_stage_01b", "auto_repair_post", "codex"],
             )
             self.assertTrue({"publish", "publisher", "pr", "merge"}.isdisjoint(stages))
 

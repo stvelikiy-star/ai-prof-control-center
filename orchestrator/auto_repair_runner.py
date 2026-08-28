@@ -281,6 +281,63 @@ def parse_scope_files(task_text: str) -> tuple[str, ...]:
     return values
 
 
+def path_within_scope(
+    project: Path,
+    relative: str,
+    scope: tuple[str, ...],
+) -> bool:
+    """Accept an exact scoped file or a child of an existing scoped directory."""
+    candidate = PurePosixPath(relative)
+    for value in scope:
+        scoped = PurePosixPath(value)
+        if candidate == scoped:
+            return True
+        absolute = project / value
+        if absolute.is_dir() and scoped in candidate.parents:
+            return True
+    return False
+
+
+def dirty_is_within_scope(
+    project: Path,
+    dirty: set[str],
+    scope: tuple[str, ...],
+) -> bool:
+    return all(path_within_scope(project, relative, scope) for relative in dirty)
+
+
+def current_branch(project: Path) -> str:
+    return git_run(project, "branch", "--show-current").stdout.strip()
+
+
+def candidate_branch_matches(project: Path, work_branch: str) -> bool:
+    """Bind a dirty candidate to the exact task work branch."""
+    return bool(work_branch) and current_branch(project) == work_branch
+
+
+def restore_terminal_base_branch(
+    project: Path,
+    base_branch: str,
+    work_branch: str,
+) -> None:
+    """Return an exhausted clean candidate from its work branch to base."""
+    if dirty_paths(project):
+        raise AutoRepairError("refusing terminal branch restore while repository is dirty")
+    current = current_branch(project)
+    if current == base_branch:
+        return
+    if current != work_branch:
+        raise AutoRepairError(
+            f"refusing terminal branch restore from unexpected branch: {current}"
+        )
+    git_run(project, "checkout", base_branch)
+    actual = current_branch(project)
+    if actual != base_branch:
+        raise AutoRepairError(
+            f"terminal branch restore did not reach base branch: {actual}"
+        )
+
+
 def git_run(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", *args],
@@ -329,10 +386,13 @@ def backup_failed_candidate(project: Path, scope: tuple[str, ...], backup: Path)
 
 def restore_task_scope_to_head(project: Path, scope: tuple[str, ...]) -> None:
     dirty = dirty_paths(project)
-    scope_set = set(scope)
     if not dirty:
         raise AutoRepairError("failed Stage 01B has no dirty implementation to restore")
-    outside = sorted(dirty - scope_set)
+    outside = sorted(
+        relative
+        for relative in dirty
+        if not path_within_scope(project, relative, scope)
+    )
     if outside:
         raise AutoRepairError(
             "refusing repair rollback with unrelated dirty paths: " + ",".join(outside)
@@ -439,8 +499,6 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     log_01b, match = failure
     current_attempt = review_attempt(task_text)
     next_attempt = current_attempt + 1
-    if next_attempt > max_cycles:
-        return False
     project_raw = field(task_text, "Project-Path")
     if not project_raw:
         raise AutoRepairError("Project-Path is missing")
@@ -452,9 +510,43 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     required_checks = parse_required_checks(task_text)
     argv = validated_check_argv(command, required_checks)
     scope = parse_scope_files(task_text)
-    dirty = dirty_paths(project)
-    if not dirty or not dirty.issubset(set(scope)):
+
+    work_branch = field(task_text, "Work-Branch")
+    base_branch = field(task_text, "Base-Branch")
+    if not work_branch or not base_branch:
+        raise AutoRepairError("Base-Branch or Work-Branch is missing")
+
+    # Never attribute another task's dirty diff to this failed task.
+    if not candidate_branch_matches(project, work_branch):
         return False
+
+    dirty = dirty_paths(project)
+    if not dirty or not dirty_is_within_scope(project, dirty, scope):
+        return False
+
+    if next_attempt > max_cycles:
+        backup = backup_evidence(paths, task, [log_01b])
+        backup_failed_candidate(project, scope, backup)
+        restore_task_scope_to_head(project, scope)
+        restore_terminal_base_branch(project, base_branch, work_branch)
+
+        feedback = "\n".join([
+            f"- Automatic-Repair-Cycle-Limit: {current_attempt}/{max_cycles}",
+            f"- Failed-Required-Check: `{command}`",
+            "- Repair-cycle limit reached; no uncontrolled retry was created.",
+            "- The terminal failed candidate was preserved in the auto-repair backup.",
+            "- The task scope was restored to clean HEAD.",
+            f"- The project was returned to base branch `{base_branch}`.",
+            "- The task remains failed and requires new evidence or an explicit later decision.",
+        ])
+        atomic_write(task, set_auto_feedback(task_text, feedback))
+        print("AUTO_REPAIR_CHECK_FAILURE_EXHAUSTED_CLEANED")
+        print(f"task_id={task_id}")
+        print(f"repair_cycle={current_attempt}/{max_cycles}")
+        print(f"failed_check={command}")
+        print(f"backup={backup}")
+        print(f"base_branch={base_branch}")
+        return True
 
     backup = backup_evidence(paths, task, [log_01b])
     backup_failed_candidate(project, scope, backup)
