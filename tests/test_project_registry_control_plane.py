@@ -21,14 +21,7 @@ if PROJECT_REGISTRY_SPEC is None or PROJECT_REGISTRY_SPEC.loader is None:
 project_registry = importlib.util.module_from_spec(PROJECT_REGISTRY_SPEC)
 PROJECT_REGISTRY_SPEC.loader.exec_module(project_registry)
 
-CLAUDE_RUNNER_SPEC = importlib.util.spec_from_file_location(
-    "control_plane_claude_runner", ORCHESTRATOR / "claude_runner.py"
-)
-if CLAUDE_RUNNER_SPEC is None or CLAUDE_RUNNER_SPEC.loader is None:
-    raise RuntimeError("Cannot load claude_runner.py")
-claude_runner = importlib.util.module_from_spec(CLAUDE_RUNNER_SPEC)
-sys.modules[CLAUDE_RUNNER_SPEC.name] = claude_runner
-CLAUDE_RUNNER_SPEC.loader.exec_module(claude_runner)
+import codex_stage01b_runner_v2
 
 
 class ProjectRegistryControlPlaneTests(unittest.TestCase):
@@ -37,26 +30,29 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
         cls.projects = payload["projects"]
         cls.by_id = {project["project_id"]: project for project in cls.projects}
+        codex_stage01b_runner_v2.install_v2_required_check_allowlist()
+        cls.stage01b_allowed = set(
+            codex_stage01b_runner_v2.legacy.core.ALLOWED_COMMANDS
+        )
 
     def test_project_ids_are_unique(self):
         ids = [project["project_id"] for project in self.projects]
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_enabled_code_checks_are_executable_by_stage01b(self):
-        allowed = set(claude_runner.ALLOWED_COMMANDS)
         for project in self.projects:
             if project.get("enabled", True) is not True:
                 continue
             for check in project.get("code_required_checks", []):
                 with self.subTest(project=project["project_id"], check=check):
-                    self.assertIn(check, allowed)
+                    self.assertIn(check, self.stage01b_allowed)
 
     def test_resort_os_uses_allowlisted_repository_owned_monorepo_contract(self):
         project = self.by_id["resort-os"]
         self.assertIs(project["enabled"], True)
         self.assertNotIn("disabled_reason", project)
         self.assertEqual(project["code_required_checks"], ["npm test"])
-        self.assertIn("npm test", claude_runner.ALLOWED_COMMANDS)
+        self.assertIn("npm test", self.stage01b_allowed)
         self.assertNotIn("package.json", project["allowed_scope"])
         self.assertNotIn("control-center-verify.mjs", project["allowed_scope"])
         self.assertIn("package.json", project["forbidden_scope"])
@@ -74,7 +70,7 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
             [
                 "npm run lint",
                 "npx tsc --noEmit --incremental false",
-                "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
+                "npm run test:inspection",
                 "npm run build",
             ],
         )
