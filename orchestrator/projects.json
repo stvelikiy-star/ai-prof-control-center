@@ -155,7 +155,7 @@
       "code_required_checks": [
         "npm run lint",
         "npx tsc --noEmit --incremental false",
-        "node --test --experimental-strip-types src/lib/inspection-rules.test.ts",
+        "npm run test:inspection",
         "npm run build"
       ],
       "code_toolchain": "nvm-node",

@@ -104,11 +104,12 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
                 gate._validate_publish_target(project)
             run_mock.assert_not_called()
 
-    def test_target_gate_rejects_public_or_wrong_repository_identity(self) -> None:
+    def test_target_gate_accepts_exact_public_repository_identity(self) -> None:
         project = gate.AK_BERMET_PROJECT
         repo_payload = {
             "full_name": gate.AK_BERMET_REPOSITORY,
             "private": False,
+            "visibility": "public",
             "default_branch": "main",
             "owner": {"login": gate.OWNER},
         }
@@ -124,8 +125,42 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             "run",
             return_value=SimpleNamespace(stdout=json.dumps(repo_payload)),
         ):
-            with self.assertRaises(publisher.PublisherError):
-                gate._validate_publish_target(project)
+            gate._validate_publish_target(project)
+
+    def test_target_gate_rejects_private_or_wrong_repository_identity(self) -> None:
+        project = gate.AK_BERMET_PROJECT
+        bad_payloads = [
+            {
+                "full_name": gate.AK_BERMET_REPOSITORY,
+                "private": True,
+                "visibility": "private",
+                "default_branch": "main",
+                "owner": {"login": gate.OWNER},
+            },
+            {
+                "full_name": "stvelikiy-star/not-ak-bermet",
+                "private": False,
+                "visibility": "public",
+                "default_branch": "main",
+                "owner": {"login": gate.OWNER},
+            },
+        ]
+        for repo_payload in bad_payloads:
+            with self.subTest(payload=repo_payload):
+                with patch.object(
+                    publisher,
+                    "git_text",
+                    side_effect=[
+                        "https://github.com/stvelikiy-star/ak-bermet.git",
+                        "https://github.com/stvelikiy-star/ak-bermet.git",
+                    ],
+                ), patch.object(
+                    publisher,
+                    "run",
+                    return_value=SimpleNamespace(stdout=json.dumps(repo_payload)),
+                ):
+                    with self.assertRaises(publisher.PublisherError):
+                        gate._validate_publish_target(project)
 
     def test_telegram_source_does_not_post_fake_github_issue(self) -> None:
         with patch.object(gate, "_ORIGINAL_POST_SOURCE_COMMENT") as original:

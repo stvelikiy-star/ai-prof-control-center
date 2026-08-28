@@ -23,7 +23,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
 DEFAULT_STATE_ROOT = Path("/home/agent/.local/state/ai-prof-control-center")
@@ -42,6 +42,11 @@ SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
 )
 ALLOWED_CHECK_BINARIES = {"git", "node", "npm", "npx", "python3"}
+AK_BERMET_PROJECT = Path("/home/agent/projects/ak-bermet")
+LEGACY_AK_BERMET_INSPECTION_CHECK = (
+    "node --test --experimental-strip-types src/lib/inspection-rules.test.ts"
+)
+AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
 
 
 class AutoRepairError(RuntimeError):
@@ -156,6 +161,22 @@ def latest_log(paths: Paths, task_id: str, stage: str) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
+def latest_check_failure_log(paths: Paths, task_id: str) -> tuple[Path, re.Match[str]] | None:
+    candidates = sorted(
+        paths.logs.glob(f"{task_id}-01B-*.log"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for candidate in candidates:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        if first_nonempty(candidate) not in {"CODEX_STAGE01B_FAILED", "CLAUDE_FAILED"}:
+            continue
+        match = CHECK_FAILURE_RE.search(text)
+        if match:
+            return candidate, match
+    return None
+
+
 def first_nonempty(path: Path) -> str:
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if line.strip():
@@ -207,6 +228,15 @@ def parse_required_checks(task_text: str) -> list[str]:
     return checks
 
 
+def set_required_checks(task_text: str, checks: list[str]) -> str:
+    replacement = "Required-Checks: " + ", ".join(checks)
+    pattern = re.compile(FIELD_RE_TEMPLATE.format(field=re.escape("Required-Checks")))
+    updated, count = pattern.subn(replacement, task_text, count=1)
+    if count != 1:
+        raise AutoRepairError("Required-Checks is missing")
+    return updated
+
+
 def validated_check_argv(command: str, required_checks: list[str]) -> list[str]:
     normalized = " ".join(command.split())
     normalized_required = {" ".join(item.split()) for item in required_checks}
@@ -216,6 +246,132 @@ def validated_check_argv(command: str, required_checks: list[str]) -> list[str]:
     if not argv or argv[0] not in ALLOWED_CHECK_BINARIES:
         raise AutoRepairError(f"failed check binary is not allowlisted: {argv[:1]}")
     return argv
+
+
+def normalize_legacy_ak_bermet_check(
+    task_text: str, project: Path, command: str
+) -> tuple[str, str]:
+    if project != AK_BERMET_PROJECT or command != LEGACY_AK_BERMET_INSPECTION_CHECK:
+        return task_text, command
+    checks = parse_required_checks(task_text)
+    if LEGACY_AK_BERMET_INSPECTION_CHECK not in checks:
+        raise AutoRepairError("legacy AK BERMET check is absent from Required-Checks")
+    checks = [
+        AK_BERMET_INSPECTION_CHECK if item == LEGACY_AK_BERMET_INSPECTION_CHECK else item
+        for item in checks
+    ]
+    return set_required_checks(task_text, checks), AK_BERMET_INSPECTION_CHECK
+
+
+def parse_scope_files(task_text: str) -> tuple[str, ...]:
+    raw = field(task_text, "Scope-Files")
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    if not values or len(values) != len(set(values)):
+        raise AutoRepairError("Scope-Files is empty or duplicated")
+    for value in values:
+        path = PurePosixPath(value)
+        if (
+            path.is_absolute()
+            or value != path.as_posix()
+            or value in {".", ".."}
+            or ".." in path.parts
+            or any(part in {"", "."} for part in path.parts)
+        ):
+            raise AutoRepairError(f"unsafe Scope-Files entry: {value}")
+    return values
+
+
+def git_run(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(project),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        env=check_environment(),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AutoRepairError(f"git command failed: {' '.join(args[:2])}")
+    return result
+
+
+def _nul_paths(payload: str) -> set[str]:
+    return {value for value in payload.split("\0") if value}
+
+
+def dirty_paths(project: Path) -> set[str]:
+    paths: set[str] = set()
+    for args in (
+        ("diff", "--name-only", "-z"),
+        ("diff", "--cached", "--name-only", "-z"),
+        ("ls-files", "--others", "--exclude-standard", "-z"),
+    ):
+        paths.update(_nul_paths(git_run(project, *args).stdout))
+    return paths
+
+
+def backup_failed_candidate(project: Path, scope: tuple[str, ...], backup: Path) -> None:
+    candidate = backup / "candidate"
+    candidate.mkdir(mode=0o700)
+    patch = git_run(project, "diff", "--binary", "HEAD", "--", *scope).stdout
+    (candidate / "tracked.patch").write_text(patch, encoding="utf-8")
+    for relative in sorted(dirty_paths(project)):
+        source = project / relative
+        if source.exists():
+            if source.is_symlink() or not source.is_file():
+                raise AutoRepairError(f"unsafe candidate path: {relative}")
+            destination = candidate / "files" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+
+def restore_task_scope_to_head(project: Path, scope: tuple[str, ...]) -> None:
+    dirty = dirty_paths(project)
+    scope_set = set(scope)
+    if not dirty:
+        raise AutoRepairError("failed Stage 01B has no dirty implementation to restore")
+    outside = sorted(dirty - scope_set)
+    if outside:
+        raise AutoRepairError(
+            "refusing repair rollback with unrelated dirty paths: " + ",".join(outside)
+        )
+
+    tracked: list[str] = []
+    untracked: list[str] = []
+    for relative in sorted(dirty):
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", relative],
+            cwd=str(project),
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            env=check_environment(),
+            check=False,
+        )
+        (tracked if result.returncode == 0 else untracked).append(relative)
+
+    if tracked:
+        git_run(project, "restore", "--staged", "--worktree", "--source=HEAD", "--", *tracked)
+    root = project.resolve()
+    for relative in untracked:
+        target = project / relative
+        if target.is_symlink():
+            raise AutoRepairError(f"unsafe untracked repair path: {relative}")
+        parent = target.parent.resolve(strict=True)
+        if parent != root and root not in parent.parents:
+            raise AutoRepairError(f"untracked repair path escapes project: {relative}")
+        if target.exists() and not target.is_file():
+            raise AutoRepairError(f"unsafe untracked repair path: {relative}")
+        target.unlink(missing_ok=True)
+
+    remaining = dirty_paths(project)
+    if remaining:
+        raise AutoRepairError(
+            "repair rollback did not restore clean worktree: " + ",".join(sorted(remaining))
+        )
 
 
 def check_environment() -> dict[str, str]:
@@ -277,15 +433,10 @@ def recover_review_limit(paths: Paths, task: Path, max_cycles: int) -> bool:
 def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     task_text = task.read_text(encoding="utf-8")
     task_id = field(task_text, "Task-ID") or task.stem
-    log_01b = latest_log(paths, task_id, "01B")
-    if not log_01b:
+    failure = latest_check_failure_log(paths, task_id)
+    if failure is None:
         return False
-    log_text = log_01b.read_text(encoding="utf-8", errors="replace")
-    if first_nonempty(log_01b) not in {"CODEX_STAGE01B_FAILED", "CLAUDE_FAILED"}:
-        return False
-    match = CHECK_FAILURE_RE.search(log_text)
-    if not match:
-        return False
+    log_01b, match = failure
     current_attempt = review_attempt(task_text)
     next_attempt = current_attempt + 1
     if next_attempt > max_cycles:
@@ -297,13 +448,25 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     if not project.is_dir():
         raise AutoRepairError(f"project is not accessible: {project}")
     command = match.group(1).strip()
+    task_text, command = normalize_legacy_ak_bermet_check(task_text, project, command)
     required_checks = parse_required_checks(task_text)
     argv = validated_check_argv(command, required_checks)
+    scope = parse_scope_files(task_text)
+    dirty = dirty_paths(project)
+    if not dirty or not dirty.issubset(set(scope)):
+        return False
+
+    backup = backup_evidence(paths, task, [log_01b])
+    backup_failed_candidate(project, scope, backup)
     returncode, output = run_check(project, argv)
+    restore_task_scope_to_head(project, scope)
+
     feedback = "\n".join([
         f"- Automatic-Repair-Cycle: {next_attempt}/{max_cycles}",
         f"- Failed-Required-Check: `{command}`",
         f"- Diagnostic-Recheck-Exit-Code: {returncode}",
+        "- The failed implementation candidate was preserved in the auto-repair backup.",
+        "- The task scope was restored to clean HEAD before this repair attempt.",
         "- Fix the confirmed implementation or type/test/build defect directly.",
         "- Do not weaken, delete, skip, mock, or bypass any required check.",
         "- Preserve all prior Codex audit feedback and security requirements.",
@@ -314,7 +477,6 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     ])
     updated = set_review_attempt(task_text, next_attempt)
     updated = set_auto_feedback(updated, feedback)
-    backup = backup_evidence(paths, task, [log_01b])
     atomic_write(task, updated)
     destination = move_no_replace(task, paths.review)
     print("AUTO_REPAIR_CHECK_FAILURE_REQUEUED")

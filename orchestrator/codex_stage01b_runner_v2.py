@@ -2,17 +2,22 @@
 """AI PROF Stage 01B Codex V2 compatibility adapter.
 
 Keeps the hardened Stage 01B implementation runner unchanged and patches only
-its model-facing instruction contract plus terminal diagnostic persistence.
+its model-facing instruction contract, terminal diagnostic persistence, and
+one exact AK BERMET project-defined required-check allowlist entry.
 
-V2 fixes two proven production defects:
+V2 fixes three proven production defects:
 - a directory Scope-Files entry is a bounded subtree, so Codex may create a
-  requested regular file below that directory; and
+  requested regular file below that directory;
 - Stage 01B terminal failures must persist their sanitized reason on the task
-  file, not only in a side log, so Telegram/status diagnostics stay useful.
+  file, not only in a side log, so Telegram/status diagnostics stay useful; and
+- AK BERMET inspection tests must run through the repository's own
+  `npm run test:inspection` contract instead of executing TypeScript directly
+  with Node.
 
 No authority is widened: the underlying isolated workspace, scope validator,
-required-check allowlist, branch handling, patch application and rollback are
-still the original hardened implementation.
+branch handling, patch application and rollback are still the original
+hardened implementation. The additional check is an exact argv allowlist
+entry and cannot execute task prose as shell input.
 """
 from __future__ import annotations
 
@@ -50,6 +55,20 @@ _NEW_FINAL_DIRECTIVE = (
     "file."
 )
 _TASK_ID_FROM_LOG = re.compile(r"^(?P<task>.+)-01B-\d{8}T\d{6}Z\.log$")
+_AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
+_AK_BERMET_INSPECTION_ARGV = ["npm", "run", "test:inspection"]
+
+
+def install_v2_required_check_allowlist() -> None:
+    """Install only the exact AK BERMET inspection command used by runtime V2."""
+    current = legacy.core.ALLOWED_COMMANDS.get(_AK_BERMET_INSPECTION_CHECK)
+    if current is not None and current != _AK_BERMET_INSPECTION_ARGV:
+        raise legacy.CodexPolicyError(
+            "BLOCKED_CODEX_POLICY: conflicting AK BERMET inspection check mapping"
+        )
+    legacy.core.ALLOWED_COMMANDS[_AK_BERMET_INSPECTION_CHECK] = list(
+        _AK_BERMET_INSPECTION_ARGV
+    )
 
 
 def build_codex_implementation_input_v2(bundle: str) -> str:
@@ -132,7 +151,12 @@ def process_one_v2(paths) -> int:
 
 
 def run_self_test_v2(root: Path) -> int:
+    install_v2_required_check_allowlist()
     _ORIGINAL_SELF_TEST(root)
+    if legacy.core.ALLOWED_COMMANDS.get(_AK_BERMET_INSPECTION_CHECK) != (
+        _AK_BERMET_INSPECTION_ARGV
+    ):
+        raise RuntimeError("SELF_TEST_CODEX_V2_AK_BERMET_CHECK_ALLOWLIST_FAILED")
     prompt = build_codex_implementation_input_v2(
         "Scope-Files: docs\nInstructions: create docs/AI_PROF_E2E_SMOKE.md"
     )
@@ -145,8 +169,9 @@ def run_self_test_v2(root: Path) -> int:
 
 
 def main() -> int:
-    # Patch only the two V2 seams. The legacy module still owns CLI parsing,
+    # Patch only the bounded V2 seams. The legacy module still owns CLI parsing,
     # locking, sandboxing and queue execution.
+    install_v2_required_check_allowlist()
     legacy.build_codex_implementation_input = build_codex_implementation_input_v2
     legacy.process_one = process_one_v2
     legacy.run_self_test = run_self_test_v2

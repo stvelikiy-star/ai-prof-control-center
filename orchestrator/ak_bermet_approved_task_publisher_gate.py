@@ -7,7 +7,7 @@ only: commit the approved scoped diff, push its feature branch, open a PR to
 main, report the PR, and return the local checkout to clean main.
 
 Accepted intake identities are deliberately narrow:
-- the existing authorized private GitHub issue contract; or
+- the existing authorized GitHub issue contract; or
 - the exact random branch shape produced by the owner-only Telegram bridge.
 
 Other AK BERMET approved items, such as campaign/integration tasks, are left to
@@ -97,7 +97,7 @@ def _validate_publish_target(project: Path) -> None:
     push_url = publisher.git_text(project, "remote", "get-url", "--push", "origin")
     if fetch_url not in _ALLOWED_ORIGIN_URLS or push_url not in _ALLOWED_ORIGIN_URLS:
         raise publisher.PublisherError(
-            "AK BERMET origin does not match the fixed private repository"
+            "AK BERMET origin does not match the fixed repository"
         )
 
     result = publisher.run(["gh", "api", f"repos/{AK_BERMET_REPOSITORY}"])
@@ -112,13 +112,14 @@ def _validate_publish_target(project: Path) -> None:
     if not (
         isinstance(repo, dict)
         and repo.get("full_name") == AK_BERMET_REPOSITORY
-        and repo.get("private") is True
+        and repo.get("private") is False
+        and repo.get("visibility") == "public"
         and repo.get("default_branch") == AK_BERMET_BASE_BRANCH
         and isinstance(owner, dict)
         and owner.get("login") == OWNER
     ):
         raise publisher.PublisherError(
-            "AK BERMET GitHub publish target identity/privacy check failed"
+            "AK BERMET GitHub publish target identity/visibility check failed"
         )
 
 
@@ -306,8 +307,6 @@ def main() -> int:
     publisher.process_task = _process_task_with_target_gate
     publisher.process_one = _process_one_ak_bermet
     result = publisher.main()
-    # control_loop treats child rc=1 as a normal task result. Publishing is a
-    # repository-state gate, so any publisher failure halts the cycle.
     return 0 if result == 0 else 3
 
 
