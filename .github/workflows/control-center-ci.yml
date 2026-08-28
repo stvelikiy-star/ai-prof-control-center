@@ -134,7 +134,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          python3 -m unittest -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Ensure no tracked bytecode
         run: |
