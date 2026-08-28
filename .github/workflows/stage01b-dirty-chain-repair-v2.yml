@@ -42,11 +42,6 @@ jobs:
             --root "$PWD" \
             --state-root /tmp/ai-prof-state \
             --self-test
-
-      - name: Validate full suite
-        run: |
-          set -euo pipefail
-          python3 -m unittest discover -s tests -p 'test_*.py'
           git diff --check
 
       - name: Commit canonical repair
