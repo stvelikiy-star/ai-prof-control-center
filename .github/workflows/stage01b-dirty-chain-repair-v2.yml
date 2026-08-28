@@ -1,0 +1,71 @@
+name: One-shot Stage01B dirty-chain repair v2
+
+on:
+  push:
+    branches:
+      - fix/stage01b-dirty-chain-v2
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply repair script
+        run: python3 .github/repair_stage01b_dirty_chain.py
+
+      - name: Validate focused regression
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            orchestrator/control_loop.py \
+            orchestrator/auto_repair_runner.py \
+            tests/test_control_loop.py \
+            tests/test_stage01b_dirty_chain_v2.py
+          python3 -m unittest \
+            tests.test_control_loop \
+            tests.test_auto_repair_runner \
+            tests.test_stage01b_dirty_chain_v2
+          python3 orchestrator/control_loop.py \
+            --root "$PWD" \
+            --state-root /tmp/ai-prof-state \
+            --self-test
+          python3 orchestrator/codex_stage01b_runner_v2.py \
+            --root "$PWD" \
+            --state-root /tmp/ai-prof-state \
+            --self-test
+
+      - name: Validate full suite
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          git diff --check
+
+      - name: Commit canonical repair
+        run: |
+          set -euo pipefail
+          rm .github/repair_stage01b_dirty_chain.py
+          rm .github/workflows/stage01b-dirty-chain-repair-v2.yml
+          git config user.name "ai-prof-repair-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          changed="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' \
+            orchestrator/auto_repair_runner.py \
+            orchestrator/control_loop.py \
+            tests/test_control_loop.py \
+            tests/test_stage01b_dirty_chain_v2.py \
+            | sort)"
+          if [ "$changed" != "$expected" ]; then
+            echo 'Unexpected final repair scope:'
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+          git commit -m "fix(control-center): harden Stage 01B recovery pipeline"
+          git push origin HEAD:fix/stage01b-dirty-chain-v2
