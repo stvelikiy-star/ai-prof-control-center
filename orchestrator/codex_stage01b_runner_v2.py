@@ -2,22 +2,22 @@
 """AI PROF Stage 01B Codex V2 compatibility adapter.
 
 Keeps the hardened Stage 01B implementation runner unchanged and patches only
-its model-facing instruction contract, terminal diagnostic persistence, and
-one exact AK BERMET project-defined required-check allowlist entry.
+its model-facing instruction contract, terminal diagnostic persistence, and a
+small set of exact project-owned required-check allowlist entries.
 
-V2 fixes three proven production defects:
+V2 fixes proven production defects:
 - a directory Scope-Files entry is a bounded subtree, so Codex may create a
   requested regular file below that directory;
 - Stage 01B terminal failures must persist their sanitized reason on the task
-  file, not only in a side log, so Telegram/status diagnostics stay useful; and
-- AK BERMET inspection tests must run through the repository's own
-  `npm run test:inspection` contract instead of executing TypeScript directly
-  with Node.
+  file, not only in a side log, so Telegram/status diagnostics stay useful;
+- AK BERMET inspection tests run through the repository's own
+  `npm run test:inspection` contract; and
+- KÖL launch work may run the repository-owned aggregate
+  `npm run check:release-source` gate, which itself remains a fixed argv entry.
 
-No authority is widened: the underlying isolated workspace, scope validator,
-branch handling, patch application and rollback are still the original
-hardened implementation. The additional check is an exact argv allowlist
-entry and cannot execute task prose as shell input.
+No shell or task-prose authority is widened: the underlying isolated workspace,
+scope validator, branch handling, patch application and rollback remain the
+original hardened implementation. Added checks are exact argv allowlist entries.
 """
 from __future__ import annotations
 
@@ -57,17 +57,30 @@ _NEW_FINAL_DIRECTIVE = (
 _TASK_ID_FROM_LOG = re.compile(r"^(?P<task>.+)-01B-\d{8}T\d{6}Z\.log$")
 _AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
 _AK_BERMET_INSPECTION_ARGV = ["npm", "run", "test:inspection"]
+_KOL_RELEASE_SOURCE_CHECK = "npm run check:release-source"
+_KOL_RELEASE_SOURCE_ARGV = ["npm", "run", "check:release-source"]
+
+
+def _install_exact_check(command: str, argv: list[str], label: str) -> None:
+    current = legacy.core.ALLOWED_COMMANDS.get(command)
+    if current is not None and current != argv:
+        raise legacy.CodexPolicyError(
+            f"BLOCKED_CODEX_POLICY: conflicting {label} check mapping"
+        )
+    legacy.core.ALLOWED_COMMANDS[command] = list(argv)
 
 
 def install_v2_required_check_allowlist() -> None:
-    """Install only the exact AK BERMET inspection command used by runtime V2."""
-    current = legacy.core.ALLOWED_COMMANDS.get(_AK_BERMET_INSPECTION_CHECK)
-    if current is not None and current != _AK_BERMET_INSPECTION_ARGV:
-        raise legacy.CodexPolicyError(
-            "BLOCKED_CODEX_POLICY: conflicting AK BERMET inspection check mapping"
-        )
-    legacy.core.ALLOWED_COMMANDS[_AK_BERMET_INSPECTION_CHECK] = list(
-        _AK_BERMET_INSPECTION_ARGV
+    """Install exact repository-owned checks required by registered projects."""
+    _install_exact_check(
+        _AK_BERMET_INSPECTION_CHECK,
+        _AK_BERMET_INSPECTION_ARGV,
+        "AK BERMET inspection",
+    )
+    _install_exact_check(
+        _KOL_RELEASE_SOURCE_CHECK,
+        _KOL_RELEASE_SOURCE_ARGV,
+        "KÖL release-source",
     )
 
 
@@ -157,6 +170,10 @@ def run_self_test_v2(root: Path) -> int:
         _AK_BERMET_INSPECTION_ARGV
     ):
         raise RuntimeError("SELF_TEST_CODEX_V2_AK_BERMET_CHECK_ALLOWLIST_FAILED")
+    if legacy.core.ALLOWED_COMMANDS.get(_KOL_RELEASE_SOURCE_CHECK) != (
+        _KOL_RELEASE_SOURCE_ARGV
+    ):
+        raise RuntimeError("SELF_TEST_CODEX_V2_KOL_RELEASE_SOURCE_ALLOWLIST_FAILED")
     prompt = build_codex_implementation_input_v2(
         "Scope-Files: docs\nInstructions: create docs/AI_PROF_E2E_SMOKE.md"
     )
