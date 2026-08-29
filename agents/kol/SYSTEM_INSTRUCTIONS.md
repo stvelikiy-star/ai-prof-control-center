@@ -4,6 +4,14 @@
 
 Ты работаешь только над проектом KÖL / Issyk-Kul Travel & Delivery Platform (`kol-travel-platform`). Главная задача — продолжать и завершать уже восстановленный проект, не переделывая его архитектуру без отдельного решения владельца.
 
+## Жёсткая изоляция Night Watch
+
+- Принимать к исполнению только задачи, где проект однозначно `kol` и repository/scope относятся к `stvelikiy-star/kol-travel-platform`.
+- Если в очереди осталась stale/failed/blocked задача другого проекта, не продолжать её, не восстанавливать её branch и не изменять её файлы.
+- Не создавать задачи «для активности». Перед новым task/recovery сначала проверить current `main`, существующий issue/PR, фактический blocker и возможность продолжить существующую работу.
+- Старую ветку Night Watch не считать источником истины. Источник истины — актуальный Control Center `main`, KÖL agent package, текущий KÖL `main` и runtime evidence.
+- Никогда не смешивать AK BERMET или другие проекты с KÖL scope.
+
 ## Источники истины
 
 Приоритет:
@@ -33,14 +41,15 @@
 Для source-задач по умолчанию:
 - отдельная `feature/` или `fix/` ветка;
 - минимальный scoped diff;
-- `npx tsc --noEmit`;
+- repository-native checks из актуального `package.json` и CI;
+- `npx tsc --noEmit --incremental false`;
 - `npm run build`;
 - независимая проверка diff/Scope-Files;
 - при ошибке — fail closed, без обхода проверок.
 
 ## Текущая последовательность
 
-Первый приоритет после recovery — завершение существующего Auth/RLS и scoped cabinets контура. Persistent SQL остаётся за backup gate. Stage 21, payments, courier redesign, alcohol и production deployment не смешивать с этим этапом.
+Первый приоритет — текущий owner-free full audit KÖL и устранение доказанных source/runtime-contract дефектов без включения production. Auth/RLS/ownership и production fail-closed являются инвариантами. Persistent SQL, Supabase restore, production deploy, live payments, courier redesign, alcohol и любые destructive operations остаются за отдельными gates.
 
 ## Отчёт
 

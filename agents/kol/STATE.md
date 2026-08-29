@@ -1,25 +1,38 @@
 # KÖL CURRENT STATE
 
-Updated: 2026-08-13.
+Updated: 2026-08-29.
 
-## Verified
+## Project isolation
 
-- Canonical local path: `/home/agent/Загрузки/kol-travel-platform`.
-- Private GitHub repository: `stvelikiy-star/kol-travel-platform`.
-- Recovered source baseline on `main`: `7e713b19f6c73c329c09df1163afba17c5443096`.
-- KÖL is registered in AI PROF as `kol-travel-platform`.
-- Source TypeScript and production build passed after the Phase 3 source patch; Next build completed 134/134 static pages.
-- With `DATA_SOURCE_MODE=supabase` and `AUTH_PROTECTION_ENABLED=true`, unauthenticated `/client`, `/partner`, `/courier`, `/admin` redirect to `/login`.
-- Database was not persistently changed by the Phase 3 source patch.
+- This agent package is for `project=kol` only.
+- Canonical repository: `stvelikiy-star/kol-travel-platform`.
+- Canonical local path from `orchestrator/projects.json`: `/home/agent/projects/kol-travel-platform`.
+- Do not read, modify, enqueue, recover or reinterpret tasks for AK BERMET or any other project while operating as the KÖL agent.
+- Ignore stale Night Watch branches and historical queue records as current truth unless they are re-verified against current `main` and runtime evidence.
 
-## Blocked / pending
+## Verified source baseline
 
-- Persistent Auth/RLS repair remains blocked until a verified database backup exists.
-- Seeded Auth rows are not confirmed sign-in-ready real accounts.
-- Historical Stage 21 migration remains HOLD / not applied.
-- Courier assignment model has known drift and is not part of the first Auth/RLS repair.
-- Production deployment is not authorized by normal AI PROF code tasks.
+- KÖL audit-start `main`: `960bad09a9a6c07409984b5f1ca903b45c852afd`.
+- Exact-main KOL CI run #413 was rerun on the same SHA on 2026-08-29 and completed successfully without source changes; the earlier failure on that run is therefore not evidence of a current code regression.
+- `main` is not protected by GitHub branch protection/rulesets; green CI is evidence, not an enforced merge policy.
+- Production source is intentionally fail-closed: `PRODUCTION_RUNTIME_IMPLEMENTATION_READY=false`.
+- Public/non-production demo may run in explicit mock mode; mock/demo evidence must never be reported as production evidence.
 
-## Current execution objective
+## Current audit findings
 
-Finish the recovered existing architecture in controlled phases. First remove infrastructure blockers in AI PROF remote execution, then continue Auth/RLS completion without mixing unrelated Stage 21, payments, courier redesign, alcohol, or deployment changes.
+- Supabase project visible for KÖL is `kol-travel-platform-test` (`mphruawzozrpwcjgejhs`) and is currently `INACTIVE`; do not claim live database health or restore/mutate it without an explicitly authorized operation.
+- Public Vercel Demo Center is a mock presentation surface and explicitly identifies freeze `874841bbcef8026b18ffe3a0cbed1884ea1320d3`; it is not proof that current GitHub `main` is deployed to production.
+- Multiple historical/probe/freeze KÖL Vercel projects exist. Do not delete, promote or call one canonical without source/deployment evidence.
+- Current README contains mojibake/stale presentation text and requires factual cleanup.
+- Full audit found a production-environment precedence fail-open: a manual `KOL_DEPLOYMENT_ENV` could override `VERCEL_ENV=production`. Repair is in KÖL PR #57 and must not be reported fixed until exact-head CI passes and the PR is merged.
+
+## Night Watch execution objective
+
+Work continuously on KÖL owner-free completion only:
+
+1. Audit current KÖL `main` before editing.
+2. Fix one proven root cause at a time; prefer existing work over duplicate tasks.
+3. Preserve Auth/RLS/ownership/payment safety boundaries and production fail-closed behavior.
+4. Run repository-native checks after every repair and the full KÖL CI before merge.
+5. Keep production/Supabase restore, deployment, secrets, payment activation and destructive data changes behind explicit operation/owner gates.
+6. Report `VERIFIED/PASS`, `IMPLEMENTED`, `BLOCKED`, and `UNKNOWN` separately; never turn preview/mock evidence into production PASS.
