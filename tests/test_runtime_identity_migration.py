@@ -40,6 +40,13 @@ class RuntimeIdentityTests(unittest.TestCase):
             wrapper,
         )
 
+    def test_control_center_systemd_sandbox_allows_kol_project(self):
+        unit = (ROOT / "systemd/ai-prof-control-center.service").read_text(encoding="utf-8")
+        self.assertIn("ProtectSystem=strict", unit)
+        self.assertIn("ProtectHome=read-only", unit)
+        self.assertIn("/home/agent/Загрузки/kol-travel-platform", unit)
+        self.assertNotIn("/home/agent/projects/ai-prof-control-center-night-watch", unit)
+
     def test_migration_orders_preparation_cutover_and_rollback(self):
         module_path = ROOT / "scripts/migrate_runtime_identity_v1.py"
         spec = importlib.util.spec_from_file_location("runtime_identity_migration", module_path)
