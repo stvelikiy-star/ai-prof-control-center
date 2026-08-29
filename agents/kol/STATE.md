@@ -6,47 +6,53 @@ Updated: 2026-08-29.
 
 - This agent package is for `project_id=kol-travel-platform` only.
 - Canonical repository: `stvelikiy-star/kol-travel-platform`.
-- Canonical local path in the current Control Center registry: `/home/agent/Загрузки/kol-travel-platform`.
-- Do not read, modify, enqueue, recover or reinterpret tasks for AK BERMET or any other project while operating as the KÖL agent.
-- Ignore stale Night Watch branches and historical queue records as current truth unless they are re-verified against current `main` and runtime evidence.
+- Canonical local path: `/home/agent/Загрузки/kol-travel-platform`.
+- Never read, modify, enqueue, recover or reinterpret tasks for AK BERMET or any other project while operating as the KÖL agent.
+- Ignore stale queue/history/branches unless re-verified against current `main` and runtime evidence.
 
 ## Verified source baseline
 
-- KÖL canonical `main` after the 2026-08-29 full audit repairs: `284cf333485e94ad7ec51a9ce49446426a6be4f3`.
-- PR #57 `fix(security): keep Vercel production fail-closed` was squash-merged only after exact-head SUCCESS on KOL CI #422, KOL Public Flows #214 and KOL Visual QA #251.
-- PR #58 replaced the corrupted/obsolete README and was squash-merged only after current-base SUCCESS on KOL CI #424, KOL Public Flows #215 and KOL Visual QA #252.
-- The production-environment precedence bug is fixed in source: real `VERCEL_ENV=production` cannot be downgraded by manual `KOL_DEPLOYMENT_ENV`.
-- Release/public/finance/operational QA drift discovered during the audit was reconciled without removing forbidden/demo safety assertions.
-- Production source remains intentionally fail-closed: `PRODUCTION_RUNTIME_IMPLEMENTATION_READY=false`.
-- `main` is not protected by GitHub branch protection/rulesets; green CI is evidence, not an enforced repository policy.
-- Public/non-production demo may run in explicit mock mode; mock/demo evidence must never be reported as production evidence.
+- KÖL canonical `main`: `284cf333485e94ad7ec51a9ce49446426a6be4f3` unless GitHub main has legitimately advanced.
+- PR #57 production fail-closed repair passed KOL CI #422, Public Flows #214 and Visual QA #251 before merge.
+- PR #58 current-state README repair passed KOL CI #424, Public Flows #215 and Visual QA #252 before merge.
+- `VERCEL_ENV=production` is authoritative and must not be downgraded by `KOL_DEPLOYMENT_ENV`.
+- `PRODUCTION_RUNTIME_IMPLEMENTATION_READY=false` remains a hard source gate until explicit production acceptance.
+- Mock/preview evidence is never production evidence.
 
-## Current external/runtime facts
+## External/runtime facts
 
-- Supabase project visible for KÖL is `kol-travel-platform-test` (`mphruawzozrpwcjgejhs`) and remains `INACTIVE`; do not claim live database health or restore/mutate it without an explicitly authorized operation.
-- `kol-travel-platform-app` exists in Vercel and historical READY deployments exist, but no inspected deployment is accepted as proof that current GitHub `main` is the business-production runtime.
-- Multiple historical/probe/freeze KÖL Vercel projects exist. Do not delete, promote or call one canonical without source/deployment evidence.
-- GitHub issue #16 remains the canonical P0 owner/production gate: Supabase restore/baseline/backup/staging, Auth/security acceptance, payment-provider and business-rule decisions, production secrets/config, current-main staging E2E and explicit production approval remain outside ordinary owner-free tasks.
+- KÖL Supabase `mphruawzozrpwcjgejhs` remains INACTIVE. Ordinary Night Watch tasks must not restore, unpause, migrate or mutate it.
+- Historical Vercel READY deployments are not proof that current `main` is the business-production runtime.
+- Issue #16 remains the canonical P0 owner/production gate: active Supabase/staging/backup evidence, real Auth/security acceptance, payment and fee/refund/payout decisions, production secrets/config, staging E2E, production-readiness approval and final deploy approval.
+- `main` is not protected by GitHub branch protection; CI evidence must therefore be checked explicitly on the exact head.
 
-## Documentation status
+## Maximum owner-free capability
 
-- Root README now reflects the current Next.js 16.3.1 architecture, production fail-closed contract, P0 gates and verification workflow.
-- Dated `docs/` reports are historical evidence unless re-verified against current source/runtime.
+The KÖL execution profile is intentionally widened for the launch push to cover source plus repository-native QA/release contracts:
 
-## Registry capability boundary
+- `README.md`, `docs/**`, `src/**`, `app/**`, `components/**`, `lib/**`, `public/**`, `tests/**`, `supabase/**`;
+- `scripts/**`, `.github/workflows/**`, `.env.example`;
+- `package.json`, TypeScript/Next/Tailwind/PostCSS/middleware config and `vercel.json`.
 
-- The registered KÖL execution profile currently allows `README.md`, `docs/**`, `src/**`, `app/**`, `components/**`, `lib/**`, `public/**`, `tests/**`, `supabase/**` and selected project config files.
-- It does not currently authorize ordinary KÖL tasks to edit `scripts/**`, `.github/workflows/**` or `.env.example`.
-- Do not widen scope inside a task or pretend those paths are writable. If a verified root cause requires them, return the exact capability blocker for coordinator review instead of bypassing the registry.
+This wider source scope does **not** grant commit, push, merge, deployment, secrets, credentials, live DB mutation, Supabase restore, production config mutation or payment activation authority.
 
-## Night Watch execution objective
+## Mandatory verification
 
-Work continuously on KÖL owner-free completion only:
+For every meaningful code repair run relevant touched-module checks. Final source gate must include:
 
-1. Audit current KÖL `main` before editing.
-2. Fix one proven root cause at a time; prefer existing work over duplicate tasks.
-3. Preserve Auth/RLS/ownership/payment safety boundaries and production fail-closed behavior.
-4. Stay inside the registered Scope-Files and run repository-native checks after every repair.
-5. For code tasks, at minimum run the registered `npx tsc --noEmit` and `npm run build`; also run any relevant repository-native checks available within task scope.
-6. Keep production/Supabase restore, deployment, secrets, payment activation and destructive data changes behind explicit operation/owner gates.
-7. Report `VERIFIED/PASS`, `IMPLEMENTED`, `BLOCKED`, and `UNKNOWN` separately; never turn preview/mock evidence into production PASS.
+1. `npm run lint`
+2. `npx tsc --noEmit --incremental false`
+3. `npm run check:release-source`
+4. `npm run build`
+
+`check:release-source` includes dependency audit, Supabase source/staging checks, live-baseline read-only verification, deployment environment checks/selftests, lint, typecheck and build. Do not bypass a failing gate to manufacture progress.
+
+## Night Watch objective until launch
+
+1. Audit actual current `main` before every repair chain.
+2. Continue KÖL only; never create activity-only duplicate tasks.
+3. Fix proven owner-free root causes one at a time, including QA/release scripts when the defect is real.
+4. Preserve Auth/RBAC/RLS/ownership, finance fail-closed, booking/order integrity and production fail-closed invariants.
+5. Do not invent payments, commissions, refunds, payouts, bookings, orders, partner data or production status.
+6. When a real owner/production gate is reached, stop only that blocked path and continue other safe owner-free KÖL work.
+7. Report `FACTS`, `FIXED`, `VERIFIED`, `UNVERIFIED`, `CAPABILITY_BLOCKER`, `OWNER_ACTION_REQUIRED`, `RELEASE-READINESS` separately.
