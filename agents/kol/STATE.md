@@ -12,10 +12,11 @@ Updated: 2026-08-29.
 
 ## Verified source baseline
 
-- KÖL canonical `main` after the 2026-08-29 security/QA audit repair: `aaefc69c4e3b63876c4c92c7a8c1602eb30c726e`.
+- KÖL canonical `main` after the 2026-08-29 full audit repairs: `284cf333485e94ad7ec51a9ce49446426a6be4f3`.
 - PR #57 `fix(security): keep Vercel production fail-closed` was squash-merged only after exact-head SUCCESS on KOL CI #422, KOL Public Flows #214 and KOL Visual QA #251.
-- The production-environment precedence bug is therefore fixed in source: real `VERCEL_ENV=production` cannot be downgraded by manual `KOL_DEPLOYMENT_ENV`.
-- Release/public/finance/operational QA drift discovered during that audit was reconciled without removing forbidden/demo safety assertions.
+- PR #58 replaced the corrupted/obsolete README and was squash-merged only after current-base SUCCESS on KOL CI #424, KOL Public Flows #215 and KOL Visual QA #252.
+- The production-environment precedence bug is fixed in source: real `VERCEL_ENV=production` cannot be downgraded by manual `KOL_DEPLOYMENT_ENV`.
+- Release/public/finance/operational QA drift discovered during the audit was reconciled without removing forbidden/demo safety assertions.
 - Production source remains intentionally fail-closed: `PRODUCTION_RUNTIME_IMPLEMENTATION_READY=false`.
 - `main` is not protected by GitHub branch protection/rulesets; green CI is evidence, not an enforced repository policy.
 - Public/non-production demo may run in explicit mock mode; mock/demo evidence must never be reported as production evidence.
@@ -29,8 +30,7 @@ Updated: 2026-08-29.
 
 ## Documentation status
 
-- The old mojibake/Next.js-14 README has a docs-only repair in PR #58.
-- Do not report README cleanup as merged until PR #58 passes current-base KOL CI, Public Flows and Visual QA and is actually merged.
+- Root README now reflects the current Next.js 16.3.1 architecture, production fail-closed contract, P0 gates and verification workflow.
 - Dated `docs/` reports are historical evidence unless re-verified against current source/runtime.
 
 ## Registry capability boundary
