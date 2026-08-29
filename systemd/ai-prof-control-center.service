@@ -23,7 +23,7 @@ RestrictNamespaces=no
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/agent/.local/state/ai-prof-control-center /home/agent/projects/ai-prof-pilot-sandbox /home/agent/projects/ak-bermet /home/agent/projects/ai-prof-control-center-maintenance /home/agent/projects/resort-os
+ReadWritePaths=/home/agent/.local/state/ai-prof-control-center /home/agent/projects/ai-prof-pilot-sandbox /home/agent/projects/ak-bermet /home/agent/projects/ai-prof-control-center-maintenance /home/agent/projects/resort-os /home/agent/Загрузки/kol-travel-platform
 UMask=0077
 
 [Install]
