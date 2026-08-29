@@ -4,9 +4,10 @@ Updated: 2026-08-29.
 
 ## Project isolation
 
-- This agent package is for `project=kol` only.
+- This agent package is for `project_id=kol-travel-platform` only.
 - Canonical repository: `stvelikiy-star/kol-travel-platform`.
-- Canonical local path from `orchestrator/projects.json`: `/home/agent/projects/kol-travel-platform`.
+- Canonical local path in the current Control Center registry: `/home/agent/Загрузки/kol-travel-platform`.
+- Historical remote-control evidence proves this registered KÖL checkout was able to run tasks through `pending -> queued -> running -> passed -> published`; later KÖL recovery evidence reached the real branch validation step. Do not replace the registered workdir without new host evidence.
 - Do not read, modify, enqueue, recover or reinterpret tasks for AK BERMET or any other project while operating as the KÖL agent.
 - Ignore stale Night Watch branches and historical queue records as current truth unless they are re-verified against current `main` and runtime evidence.
 
