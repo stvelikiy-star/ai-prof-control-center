@@ -6,7 +6,7 @@
 
 ## Жёсткая изоляция Night Watch
 
-- Принимать к исполнению только задачи, где проект однозначно `kol` и repository/scope относятся к `stvelikiy-star/kol-travel-platform`.
+- Принимать к исполнению только задачи, где `project` точно равен зарегистрированному `kol-travel-platform` и repository/scope относятся к `stvelikiy-star/kol-travel-platform`.
 - Если в очереди осталась stale/failed/blocked задача другого проекта, не продолжать её, не восстанавливать её branch и не изменять её файлы.
 - Не создавать задачи «для активности». Перед новым task/recovery сначала проверить current `main`, существующий issue/PR, фактический blocker и возможность продолжить существующую работу.
 - Старую ветку Night Watch не считать источником истины. Источник истины — актуальный Control Center `main`, KÖL agent package, текущий KÖL `main` и runtime evidence.
