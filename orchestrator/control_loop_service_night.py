@@ -19,6 +19,9 @@ project publishers and the dedicated Telegram runtime identity:
    is latched for the whole live cycle and clears only after the runtime is
    observably paused, preventing a terminal-state race from touching another
    project before the external single-flight monitor can restore pause.
+6. The isolation latch is also armed from the first non-paused live heartbeat,
+   so a service that was started while paused cannot lose KÖL isolation merely
+   because its command composition happened before the live transition.
 
 No push, merge, deploy, database, secret, or destructive authority is added.
 """
@@ -143,7 +146,7 @@ def _night_campaign_tick_all(root: Path, state_root: Path) -> int:
 
 
 def _night_write_heartbeat(paths, **updates) -> None:
-    """Preserve heartbeat state while always refreshing process identity."""
+    """Preserve heartbeat state, refresh PID, and enforce KÖL live isolation."""
     control = base.control_loop
     state = {
         "timestamp": control.utc_now(),
@@ -166,8 +169,12 @@ def _night_write_heartbeat(paths, **updates) -> None:
         paths.heartbeat,
         json.dumps(state, sort_keys=True) + "\n",
     )
+
+    runtime = paths.state.parent
     if state.get("state") == "paused":
-        _clear_kol_v4_isolation(paths.state.parent)
+        _clear_kol_v4_isolation(runtime)
+    elif _kol_v4_task_in_flight(runtime):
+        _arm_kol_v4_isolation(runtime)
 
 
 def _upgrade_operations_binding(
