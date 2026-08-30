@@ -60,6 +60,56 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         resolved = project_registry.project_for_task(ROOT, project["path"])
         self.assertEqual(resolved["project_id"], "resort-os")
 
+    def test_kol_registry_matches_current_checkout_shape(self):
+        project = self.by_id["kol-travel-platform"]
+        self.assertEqual(project["path"], "/home/agent/Загрузки/kol-travel-platform")
+        self.assertIs(project["enabled"], True)
+        self.assertEqual(
+            project["allowed_scope"],
+            [
+                "README.md",
+                "CHECK_LOCAL_RUN.md",
+                "docs/**",
+                "src/**",
+                "supabase/**",
+                "scripts/**",
+                ".github/workflows/**",
+                ".env.example",
+                "eslint.config.mjs",
+                "package.json",
+                "postcss.config.js",
+                "tailwind.config.ts",
+                "tsconfig.json",
+            ],
+        )
+        for stale in (
+            "app/**",
+            "components/**",
+            "lib/**",
+            "public/**",
+            "tests/**",
+            "next.config.mjs",
+            "next.config.js",
+            "postcss.config.mjs",
+            "middleware.ts",
+            "vercel.json",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, project["allowed_scope"])
+        self.assertEqual(
+            project["code_required_checks"],
+            [
+                "npm run lint",
+                "npx tsc --noEmit --incremental false",
+                "npm run check:release-source",
+                "npm run build",
+            ],
+        )
+        self.assertFalse(project["allow_commits"])
+        self.assertFalse(project["allow_push"])
+        self.assertFalse(project["allow_merge"])
+        self.assertFalse(project["allow_deployment"])
+
     def test_ak_bermet_registry_contains_no_removed_hold_tests(self):
         checks = self.by_id["ak-bermet"]["code_required_checks"]
         joined = "\n".join(checks)
