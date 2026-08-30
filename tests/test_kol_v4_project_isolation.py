@@ -119,6 +119,31 @@ class KolV4ProjectIsolationTests(unittest.TestCase):
         self.assertNotIn("ak_bermet_approved_publisher_pre", stages)
         self.assertNotIn("ak_bermet_approved_publisher_post", stages)
 
+    def test_live_running_heartbeat_arms_latch_until_paused(self):
+        tmp, runtime = self._runtime_with_v4()
+        self.addCleanup(tmp.cleanup)
+
+        class Paths:
+            state = runtime / "run"
+            heartbeat = state / "heartbeat.json"
+
+        Paths.state.mkdir(parents=True, exist_ok=True)
+        self.assertFalse(night._kol_v4_isolation_marker(runtime).exists())
+
+        night._night_write_heartbeat(Paths, state="running", stage="operations")
+        self.assertTrue(night._kol_v4_isolation_marker(runtime).is_file())
+
+        pending = runtime / "queue/pending/task.md"
+        failed = runtime / "queue/failed"
+        failed.mkdir(parents=True)
+        pending.rename(failed / "task.md")
+
+        night._night_write_heartbeat(Paths, state="idle", stage=None)
+        self.assertTrue(night._kol_v4_isolation_marker(runtime).is_file())
+
+        night._night_write_heartbeat(Paths, state="paused", stage=None)
+        self.assertFalse(night._kol_v4_isolation_marker(runtime).exists())
+
     def test_paused_heartbeat_clears_isolation_marker(self):
         tmp, runtime = self._runtime_with_v4()
         self.addCleanup(tmp.cleanup)
