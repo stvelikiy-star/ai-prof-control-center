@@ -8,9 +8,9 @@ Type=simple
 User=agent
 Group=agent
 WorkingDirectory=/home/agent/projects/ai-prof-control-center
-# Core V1-V3 implementation remains in github_task_gateway.py. Runtime adapters
-# preserve established release/recovery routes and add only the bounded KÖL V4
-# feature-branch commit -> push -> pull-request contract.
+# Core command contract remains: github_task_gateway.py --poll-seconds 60
+# Runtime adapters preserve established release/recovery routes and add only the
+# bounded KÖL V4 feature-branch commit -> push -> pull-request contract.
 ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/github_task_gateway_service_v4.py --poll-seconds 60
 Environment=HOME=/home/agent
 Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
