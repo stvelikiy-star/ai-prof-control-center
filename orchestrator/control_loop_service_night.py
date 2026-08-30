@@ -15,8 +15,10 @@ project publishers and the dedicated Telegram runtime identity:
 4. The operations stage uses the night wrapper that upgrades only the legacy
    plain ``python -m unittest`` health command to explicit full discovery.
 5. While a KÖL V4 task is in flight, cross-project mutators are isolated: AK
-   BERMET publisher stages and the shared campaign tick are skipped. This keeps
-   KÖL live E2E work from mutating another project checkout.
+   BERMET publisher stages and the shared campaign tick are skipped. Isolation
+   is latched for the whole live cycle and clears only after the runtime is
+   observably paused, preventing a terminal-state race from touching another
+   project before the external single-flight monitor can restore pause.
 
 No push, merge, deploy, database, secret, or destructive authority is added.
 """
@@ -40,6 +42,7 @@ AK_BERMET_PUBLISHER_STAGES = {
     "ak_bermet_approved_publisher_post",
 }
 MAX_TASK_BYTES = 1024 * 1024
+KOL_V4_ISOLATION_MARKER = "kol-v4-isolation"
 _ORIGINAL_CAMPAIGN_TICK_ALL = base.control_loop.campaign_runner.tick_all
 
 
@@ -107,10 +110,34 @@ def _kol_v4_task_in_flight(runtime: Path) -> bool:
     return False
 
 
+def _kol_v4_isolation_marker(runtime: Path) -> Path:
+    return runtime / "run" / KOL_V4_ISOLATION_MARKER
+
+
+def _kol_v4_isolation_active(runtime: Path) -> bool:
+    marker = _kol_v4_isolation_marker(runtime)
+    if marker.exists():
+        return True
+    return _kol_v4_task_in_flight(runtime)
+
+
+def _arm_kol_v4_isolation(runtime: Path) -> bool:
+    if not _kol_v4_task_in_flight(runtime):
+        return _kol_v4_isolation_active(runtime)
+    marker = _kol_v4_isolation_marker(runtime)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    base.control_loop.atomic_write(marker, "active\n")
+    return True
+
+
+def _clear_kol_v4_isolation(runtime: Path) -> None:
+    _kol_v4_isolation_marker(runtime).unlink(missing_ok=True)
+
+
 def _night_campaign_tick_all(root: Path, state_root: Path) -> int:
-    """Do not mutate campaign projects while a KÖL V4 task owns the live cycle."""
+    """Do not mutate campaign projects while a KÖL V4 live cycle is isolated."""
     runtime = Path(state_root)
-    if _kol_v4_task_in_flight(runtime):
+    if _kol_v4_isolation_active(runtime):
         return 0
     return _ORIGINAL_CAMPAIGN_TICK_ALL(root, state_root)
 
@@ -139,6 +166,8 @@ def _night_write_heartbeat(paths, **updates) -> None:
         paths.heartbeat,
         json.dumps(state, sort_keys=True) + "\n",
     )
+    if state.get("state") == "paused":
+        _clear_kol_v4_isolation(paths.state.parent)
 
 
 def _upgrade_operations_binding(
@@ -160,6 +189,7 @@ def _commands_with_night_safe_ai_prof_gate(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
+    isolated = _arm_kol_v4_isolation(runtime)
     established = _upgrade_operations_binding(
         root,
         base._commands_with_publishers(root, runtime),
@@ -170,7 +200,7 @@ def _commands_with_night_safe_ai_prof_gate(
             for stage, argv in established
             if stage != "stage_01a"
         ]
-    if _kol_v4_task_in_flight(runtime):
+    if isolated:
         established = [
             (stage, argv)
             for stage, argv in established
@@ -182,7 +212,7 @@ def _commands_with_night_safe_ai_prof_gate(
         runtime,
         "ai_prof_approved_task_publisher_gate_v2.py",
     )
-    pre_end = 1 if _kol_v4_task_in_flight(runtime) else 2
+    pre_end = 1 if isolated else 2
     post_start = len(established) - pre_end
     return [
         *established[:pre_end],
