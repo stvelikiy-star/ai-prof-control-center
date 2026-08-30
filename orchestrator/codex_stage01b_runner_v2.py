@@ -59,6 +59,18 @@ _AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
 _AK_BERMET_INSPECTION_ARGV = ["npm", "run", "test:inspection"]
 _KOL_RELEASE_SOURCE_CHECK = "npm run check:release-source"
 _KOL_RELEASE_SOURCE_ARGV = ["npm", "run", "check:release-source"]
+_KOL_REQUIRED_CHECKS = (
+    "npm run lint",
+    "npx tsc --noEmit --incremental false",
+    _KOL_RELEASE_SOURCE_CHECK,
+    "npm run build",
+)
+_KOL_REQUIRED_ARGVS = [
+    ["npm", "run", "lint"],
+    ["npx", "tsc", "--noEmit", "--incremental", "false"],
+    _KOL_RELEASE_SOURCE_ARGV,
+    ["npm", "run", "build"],
+]
 
 
 def _install_exact_check(command: str, argv: list[str], label: str) -> None:
@@ -82,6 +94,22 @@ def install_v2_required_check_allowlist() -> None:
         _KOL_RELEASE_SOURCE_ARGV,
         "KÖL release-source",
     )
+
+
+def verify_v2_required_check_contract() -> None:
+    """Prove the exact live KÖL Required-Checks list resolves before execution."""
+    install_v2_required_check_allowlist()
+    required = ", ".join(_KOL_REQUIRED_CHECKS)
+    try:
+        resolved = legacy.core.resolve_allowed_checks(required)
+    except Exception as exc:
+        raise legacy.CodexPolicyError(
+            "BLOCKED_CODEX_POLICY: KÖL required-check contract is unavailable"
+        ) from exc
+    if resolved != _KOL_REQUIRED_ARGVS:
+        raise legacy.CodexPolicyError(
+            "BLOCKED_CODEX_POLICY: KÖL required-check argv contract drift"
+        )
 
 
 def build_codex_implementation_input_v2(bundle: str) -> str:
@@ -156,6 +184,10 @@ def persist_new_terminal_reasons(paths, before_logs: set[Path]) -> None:
 
 
 def process_one_v2(paths) -> int:
+    # Re-install and resolve the exact KÖL contract at the task-processing
+    # boundary. This prevents module-import/order drift from silently falling
+    # back to the legacy allowlist during a long-lived runtime.
+    verify_v2_required_check_contract()
     before_logs = set(paths.logs.glob("*-01B-*.log"))
     rc = _ORIGINAL_PROCESS_ONE(paths)
     if rc != 0:
@@ -164,7 +196,7 @@ def process_one_v2(paths) -> int:
 
 
 def run_self_test_v2(root: Path) -> int:
-    install_v2_required_check_allowlist()
+    verify_v2_required_check_contract()
     _ORIGINAL_SELF_TEST(root)
     if legacy.core.ALLOWED_COMMANDS.get(_AK_BERMET_INSPECTION_CHECK) != (
         _AK_BERMET_INSPECTION_ARGV
@@ -174,6 +206,7 @@ def run_self_test_v2(root: Path) -> int:
         _KOL_RELEASE_SOURCE_ARGV
     ):
         raise RuntimeError("SELF_TEST_CODEX_V2_KOL_RELEASE_SOURCE_ALLOWLIST_FAILED")
+    verify_v2_required_check_contract()
     prompt = build_codex_implementation_input_v2(
         "Scope-Files: docs\nInstructions: create docs/AI_PROF_E2E_SMOKE.md"
     )
@@ -188,7 +221,7 @@ def run_self_test_v2(root: Path) -> int:
 def main() -> int:
     # Patch only the bounded V2 seams. The legacy module still owns CLI parsing,
     # locking, sandboxing and queue execution.
-    install_v2_required_check_allowlist()
+    verify_v2_required_check_contract()
     legacy.build_codex_implementation_input = build_codex_implementation_input_v2
     legacy.process_one = process_one_v2
     legacy.run_self_test = run_self_test_v2
