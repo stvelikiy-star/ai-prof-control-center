@@ -28,7 +28,7 @@ def _validate_publish_target(project) -> None:
     fetch_url = publisher.git_text(project, "remote", "get-url", "origin")
     push_url = publisher.git_text(project, "remote", "get-url", "--push", "origin")
     if fetch_url not in _ALLOWED_ORIGIN_URLS or push_url not in _ALLOWED_ORIGIN_URLS:
-        raise publisher.PublisherError("KÖL origin does not match the fixed private repository")
+        raise publisher.PublisherError("KÖL origin does not match the fixed repository")
 
     result = publisher.run(["gh", "api", f"repos/{publisher.KOL_REPOSITORY}"])
     try:
@@ -39,12 +39,13 @@ def _validate_publish_target(project) -> None:
     if not (
         isinstance(repo, dict)
         and repo.get("full_name") == publisher.KOL_REPOSITORY
-        and repo.get("private") is True
+        and repo.get("private") is False
+        and repo.get("visibility") == "public"
         and repo.get("default_branch") == publisher.KOL_BASE_BRANCH
         and isinstance(owner, dict)
         and owner.get("login") == publisher.OWNER
     ):
-        raise publisher.PublisherError("GitHub publish target identity/privacy check failed")
+        raise publisher.PublisherError("GitHub publish target identity/visibility check failed")
 
 
 def _v4_path_in_scope(project, relative: str, scopes: list[str]) -> bool:
