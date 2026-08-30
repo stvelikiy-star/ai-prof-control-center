@@ -54,6 +54,79 @@ class ActivateMobileControlV2Tests(unittest.TestCase):
                 with self.assertRaisesRegex(v2.v1.ActivationError, "exactly one queue"):
                     v2.legacy_kol_task_queue()
 
+    def test_effective_control_unit_accepts_canonical_runtime(self):
+        canonical = str(v2.v1.LIVE)
+        values = {
+            "WorkingDirectory": canonical,
+            "ExecStart": (
+                "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 "
+                f"{canonical}/orchestrator/control_loop_service_night.py --daemon ; }}"
+            ),
+            "DropInPaths": "/etc/systemd/system/ai-prof-control-center.service.d/runtime.conf",
+        }
+        with mock.patch.object(v2, "systemd_property", side_effect=lambda name: values[name]):
+            identity = v2.verify_effective_control_unit()
+        self.assertEqual(identity["working_directory"], canonical)
+        self.assertIn("control_loop_service_night.py", identity["exec_start"])
+
+    def test_effective_control_unit_rejects_stale_canary_redirect(self):
+        stale = "/home/agent/projects/ai-prof-control-center-night-watch"
+        values = {
+            "WorkingDirectory": stale,
+            "ExecStart": (
+                "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 "
+                f"{stale}/orchestrator/control_loop_service_night.py "
+                f"--root {stale} --daemon ; }}"
+            ),
+            "DropInPaths": "/etc/systemd/system/ai-prof-control-center.service.d/90-night-watch-canary.conf",
+        }
+        with mock.patch.object(v2, "systemd_property", side_effect=lambda name: values[name]):
+            with self.assertRaisesRegex(v2.v1.ActivationError, "WorkingDirectory mismatch"):
+                v2.verify_effective_control_unit()
+
+    def test_effective_control_unit_rejects_noncanonical_root_override(self):
+        canonical = str(v2.v1.LIVE)
+        values = {
+            "WorkingDirectory": canonical,
+            "ExecStart": (
+                "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 "
+                f"{canonical}/orchestrator/control_loop_service_night.py "
+                "--root /tmp/other-control-center --daemon ; }"
+            ),
+            "DropInPaths": "/etc/systemd/system/ai-prof-control-center.service.d/override.conf",
+        }
+        with mock.patch.object(v2, "systemd_property", side_effect=lambda name: values[name]):
+            with self.assertRaisesRegex(v2.v1.ActivationError, "overrides --root"):
+                v2.verify_effective_control_unit()
+
+    def test_running_process_requires_systemd_heartbeat_and_proc_identity_match(self):
+        canonical = v2.v1.LIVE
+        cmdline = (
+            f"/usr/bin/python3 {canonical}/orchestrator/"
+            "control_loop_service_night.py --daemon"
+        )
+        with mock.patch.object(v2, "systemd_property", return_value="1234"), \
+             mock.patch.object(v2, "read_process_identity", return_value=(cmdline, canonical)):
+            result = v2.verify_running_control_process({"state": "paused", "pid": 1234})
+        self.assertEqual(result["pid"], 1234)
+        self.assertEqual(result["cwd"], str(canonical))
+
+    def test_running_process_rejects_heartbeat_pid_mismatch(self):
+        with mock.patch.object(v2, "systemd_property", return_value="1234"):
+            with self.assertRaisesRegex(v2.v1.ActivationError, "heartbeat PID"):
+                v2.verify_running_control_process({"state": "paused", "pid": 9999})
+
+    def test_running_process_rejects_stale_cmdline_even_with_matching_pid(self):
+        stale = Path("/home/agent/projects/ai-prof-control-center-night-watch")
+        cmdline = (
+            f"/usr/bin/python3 {stale}/orchestrator/"
+            "control_loop_service_night.py --daemon"
+        )
+        with mock.patch.object(v2, "systemd_property", return_value="1234"), \
+             mock.patch.object(v2, "read_process_identity", return_value=(cmdline, v2.v1.LIVE)):
+            with self.assertRaisesRegex(v2.v1.ActivationError, "canonical runtime script"):
+                v2.verify_running_control_process({"state": "paused", "pid": 1234})
+
     def test_paused_runtime_requires_pause_pending_task_and_paused_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
@@ -67,11 +140,13 @@ class ActivateMobileControlV2Tests(unittest.TestCase):
                 "Task-ID: legacy\n", encoding="utf-8"
             )
             (run_dir / "heartbeat.json").write_text(
-                json.dumps({"state": "paused"}) + "\n", encoding="utf-8"
+                json.dumps({"state": "paused", "pid": 1234}) + "\n", encoding="utf-8"
             )
             with mock.patch.object(v2, "STATE_ROOT", state), \
                  mock.patch.object(v2, "PAUSE_FILE", pause), \
-                 mock.patch.object(v2.v1, "service_active", return_value=True):
+                 mock.patch.object(v2.v1, "service_active", return_value=True), \
+                 mock.patch.object(v2, "verify_effective_control_unit", return_value={}), \
+                 mock.patch.object(v2, "verify_running_control_process", return_value={}):
                 heartbeat = v2.verify_paused_runtime()
             self.assertEqual(heartbeat["state"], "paused")
 

@@ -9,7 +9,11 @@ Watch validation:
 - the canonical Control Center repository identity is exact and currently public;
 - the runtime pause guard must already exist before any activation work;
 - the legacy KÖL V1 task must exist exactly once and remain in pending;
-- after services start, the Control Center heartbeat must report `paused`.
+- after unit installation, effective systemd WorkingDirectory/ExecStart must
+  still point at the canonical Control Center after all drop-ins are applied;
+- after services start, the Control Center heartbeat must report `paused`, and
+  systemd MainPID, heartbeat PID, /proc cmdline and cwd must identify the same
+  canonical Control Center process.
 
 No task is unpaused, cancelled, created, merged or deployed by this script.
 """
@@ -37,6 +41,7 @@ EXPECTED_VISIBILITY = "public"
 STATE_ROOT = Path("/home/agent/.local/state/ai-prof-control-center")
 PAUSE_FILE = STATE_ROOT / "run" / "paused"
 CANONICAL_LEGACY_KOL_TASK = "KOL_TRAVEL_PLATFORM_20260829T095522Z_CFB967"
+CONTROL_SERVICE = "ai-prof-control-center.service"
 QUEUE_NAMES = (
     "pending",
     "active",
@@ -61,6 +66,98 @@ def expected_identity() -> str:
             EXPECTED_VISIBILITY,
         )
     )
+
+
+def canonical_control_script() -> Path:
+    return v1.LIVE / "orchestrator" / "control_loop_service_night.py"
+
+
+def systemd_property(name: str) -> str:
+    result = v1.sudo(
+        "systemctl",
+        "show",
+        CONTROL_SERVICE,
+        f"--property={name}",
+        "--value",
+        capture=True,
+    )
+    return (result.stdout or "").strip()
+
+
+def verify_effective_control_unit() -> dict[str, str]:
+    """Reject stale drop-ins that redirect the effective service elsewhere."""
+    working_directory = systemd_property("WorkingDirectory")
+    exec_start = systemd_property("ExecStart")
+    drop_ins = systemd_property("DropInPaths")
+    expected_root = str(v1.LIVE)
+    expected_script = str(canonical_control_script())
+
+    if working_directory != expected_root:
+        raise v1.ActivationError(
+            "effective Control Center WorkingDirectory mismatch after systemd drop-ins: "
+            f"expected {expected_root!r}, got {working_directory!r}; drop-ins={drop_ins!r}"
+        )
+    if expected_script not in exec_start:
+        raise v1.ActivationError(
+            "effective Control Center ExecStart does not use canonical runtime: "
+            f"expected script {expected_script!r}; exec_start={exec_start!r}; "
+            f"drop-ins={drop_ins!r}"
+        )
+    if "--root" in exec_start and f"--root {expected_root}" not in exec_start:
+        raise v1.ActivationError(
+            "effective Control Center ExecStart overrides --root away from canonical checkout: "
+            f"exec_start={exec_start!r}; drop-ins={drop_ins!r}"
+        )
+    return {
+        "working_directory": working_directory,
+        "exec_start": exec_start,
+        "drop_ins": drop_ins,
+    }
+
+
+def read_process_identity(pid: int) -> tuple[str, Path]:
+    proc = Path("/proc") / str(pid)
+    try:
+        cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+            "utf-8", "replace"
+        ).strip()
+        cwd = (proc / "cwd").resolve(strict=True)
+    except OSError as exc:
+        raise v1.ActivationError(
+            f"cannot inspect Control Center process identity for pid={pid}: {exc}"
+        ) from exc
+    return cmdline, cwd
+
+
+def verify_running_control_process(heartbeat: dict) -> dict[str, object]:
+    """Bind systemd, heartbeat and /proc identity to the canonical runtime."""
+    main_pid_text = systemd_property("MainPID")
+    if not main_pid_text.isdigit() or int(main_pid_text) <= 1:
+        raise v1.ActivationError(
+            f"invalid effective Control Center MainPID: {main_pid_text!r}"
+        )
+    main_pid = int(main_pid_text)
+    heartbeat_pid = heartbeat.get("pid")
+    if heartbeat_pid != main_pid:
+        raise v1.ActivationError(
+            "Control Center heartbeat PID does not match systemd MainPID: "
+            f"heartbeat_pid={heartbeat_pid!r}, main_pid={main_pid}"
+        )
+
+    cmdline, cwd = read_process_identity(main_pid)
+    expected_root = v1.LIVE
+    expected_script = str(canonical_control_script())
+    if expected_script not in cmdline:
+        raise v1.ActivationError(
+            "running Control Center process does not use canonical runtime script: "
+            f"pid={main_pid}, cmdline={cmdline!r}"
+        )
+    if cwd != expected_root:
+        raise v1.ActivationError(
+            "running Control Center cwd is not canonical checkout: "
+            f"pid={main_pid}, expected={str(expected_root)!r}, got={str(cwd)!r}"
+        )
+    return {"pid": main_pid, "cmdline": cmdline, "cwd": str(cwd)}
 
 
 def verify_repository_identity() -> None:
@@ -161,12 +258,14 @@ def verify_paused_runtime() -> dict:
     if legacy_kol_task_queue() != "pending":
         raise v1.ActivationError("legacy KÖL V1 task moved while runtime should be paused")
 
+    verify_effective_control_unit()
     deadline = time.monotonic() + PAUSED_HEALTH_TIMEOUT_SECONDS
     last_heartbeat: dict = {}
     while time.monotonic() < deadline:
         all_active = all(v1.service_active(name) for name in v1.SERVICES)
         last_heartbeat = read_heartbeat()
         if all_active and last_heartbeat.get("state") == "paused":
+            verify_running_control_process(last_heartbeat)
             return last_heartbeat
         time.sleep(1)
 
