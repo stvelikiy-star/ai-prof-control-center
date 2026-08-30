@@ -170,11 +170,13 @@ def _night_write_heartbeat(paths, **updates) -> None:
         json.dumps(state, sort_keys=True) + "\n",
     )
 
-    runtime = paths.state.parent
-    if state.get("state") == "paused":
-        _clear_kol_v4_isolation(runtime)
-    elif _kol_v4_task_in_flight(runtime):
-        _arm_kol_v4_isolation(runtime)
+    state_path = getattr(paths, "state", None)
+    if isinstance(state_path, Path):
+        runtime = state_path.parent
+        if state.get("state") == "paused":
+            _clear_kol_v4_isolation(runtime)
+        elif _kol_v4_task_in_flight(runtime):
+            _arm_kol_v4_isolation(runtime)
 
 
 def _upgrade_operations_binding(
