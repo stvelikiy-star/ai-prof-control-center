@@ -10,6 +10,7 @@ from __future__ import annotations
 import github_task_gateway as gateway
 import github_task_gateway_service as established
 import kol_publication_contract_v4 as kol_v4
+import submit_task as submit
 
 
 def _mark_v4_record(record: dict) -> dict:
@@ -41,7 +42,7 @@ def process_kol_v4_issue(issue: dict, issues_state: dict) -> bool:
             )
             return True
         created = kol_v4.submit_contract(number, contract)
-    except gateway.GatewayError as exc:
+    except (gateway.GatewayError, submit.IntakeError) as exc:
         code = gateway.sanitize(exc, 500)
         issues_state[key] = {
             "status": "rejected",
