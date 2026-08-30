@@ -2,8 +2,14 @@
 """Create/update the isolated AI PROF self-maintenance checkout safely.
 
 The maintenance checkout is a standalone local clone, not a linked Git
-worktree.  This keeps its Git metadata independent from the live Control
-Center checkout and satisfies the strict task-intake repository contract.
+worktree. This keeps its Git metadata independent from the live Control Center
+checkout and satisfies the strict task-intake repository contract.
+
+A clean standalone ``maintenance/base`` checkout may legitimately contain local
+history from earlier self-maintenance runs. If that history no longer
+fast-forwards to ``origin/main``, bootstrap preserves the old HEAD on a local
+archive branch before realigning ``maintenance/base`` to exact ``origin/main``.
+No reset --hard, clean, force-push, merge commit, or history deletion is used.
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ SOURCE = Path("/home/agent/projects/ai-prof-control-center")
 TARGET = Path("/home/agent/projects/ai-prof-control-center-maintenance")
 BASE_BRANCH = "maintenance/base"
 REMOTE_REF = "origin/main"
+ARCHIVE_PREFIX = "archive/maintenance-base-"
 
 
 class BootstrapError(RuntimeError):
@@ -35,6 +42,17 @@ def run(argv: list[str], *, cwd: Path | None = None, capture: bool = False) -> s
             f"command failed: {argv[0]} {argv[1] if len(argv) > 1 else ''}: {detail}"
         )
     return (result.stdout or "").strip()
+
+
+def run_status(argv: list[str], *, cwd: Path) -> int:
+    """Return a Git-style status code without mutating repository state."""
+    return subprocess.run(
+        argv,
+        cwd=str(cwd),
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode
 
 
 def ensure_plain_directory(path: Path, label: str) -> Path:
@@ -58,6 +76,20 @@ def status(path: Path) -> str:
     return run(["git", "status", "--porcelain"], cwd=path, capture=True)
 
 
+def ref_sha(path: Path, ref: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=str(path),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    value = (result.stdout or "").strip()
+    return value or None
+
+
 def clone_target(source: Path, target: Path, origin_url: str) -> None:
     run(["git", "clone", origin_url, str(target)], cwd=source.parent)
     run(["git", "switch", "-c", BASE_BRANCH, REMOTE_REF], cwd=target)
@@ -74,6 +106,46 @@ def convert_linked_worktree(source: Path, target: Path, origin_url: str) -> None
     if target.exists():
         raise BootstrapError("linked maintenance worktree was not removed cleanly")
     clone_target(source, target, origin_url)
+
+
+def reconcile_clean_standalone(target: Path) -> str | None:
+    """Fast-forward a clean maintenance clone or archive+realign divergence.
+
+    The caller has already proven the checkout is a standalone clean clone on
+    ``maintenance/base`` with the expected origin. A normal ancestor relation
+    uses the historical ff-only path. Otherwise the current HEAD is preserved
+    under a deterministic local archive branch before ``maintenance/base`` is
+    moved from detached state to exact ``origin/main``.
+    """
+    if run_status(
+        ["git", "merge-base", "--is-ancestor", "HEAD", REMOTE_REF],
+        cwd=target,
+    ) == 0:
+        run(["git", "merge", "--ff-only", REMOTE_REF], cwd=target)
+        return None
+
+    local_sha = head(target)
+    remote_sha = head(target, REMOTE_REF)
+    archive_branch = f"{ARCHIVE_PREFIX}{local_sha[:12]}"
+    archive_ref = f"refs/heads/{archive_branch}"
+    existing = ref_sha(target, archive_ref)
+    if existing is None:
+        run(["git", "branch", archive_branch, local_sha], cwd=target)
+    elif existing != local_sha:
+        raise BootstrapError(
+            "maintenance archive branch exists with unexpected SHA: "
+            f"{archive_branch}={existing}, expected {local_sha}"
+        )
+
+    run(["git", "switch", "--detach", remote_sha], cwd=target)
+    run(["git", "branch", "-f", BASE_BRANCH, remote_sha], cwd=target)
+    run(["git", "switch", BASE_BRANCH], cwd=target)
+
+    if head(target) != remote_sha:
+        raise BootstrapError("maintenance realignment did not reach origin/main")
+    if status(target):
+        raise BootstrapError("maintenance checkout became dirty during realignment")
+    return archive_branch
 
 
 def bootstrap(source: Path = SOURCE, target: Path = TARGET) -> str:
@@ -104,7 +176,7 @@ def bootstrap(source: Path = SOURCE, target: Path = TARGET) -> str:
             if target_origin != origin_url:
                 raise BootstrapError("maintenance checkout origin does not match source origin")
             run(["git", "fetch", "origin", "main"], cwd=target)
-            run(["git", "merge", "--ff-only", REMOTE_REF], cwd=target)
+            reconcile_clean_standalone(target)
         else:
             raise BootstrapError("maintenance checkout exists but is not a standalone Git clone")
     else:
