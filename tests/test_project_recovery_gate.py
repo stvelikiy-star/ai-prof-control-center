@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -29,6 +30,10 @@ class ProjectRecoveryGateTests(unittest.TestCase):
                 "code_required_checks": ["npm test"],
             }]}), encoding="utf-8"
         )
+        (root / "proof.txt").write_text(
+            "checkpoint-marker\nrollback-marker\nrestore-marker\nfault-marker\n",
+            encoding="utf-8",
+        )
         (root / "orchestrator" / "project_recovery_contracts.json").write_text(
             json.dumps({"version": 1, "projects": [contract]}), encoding="utf-8"
         )
@@ -44,6 +49,18 @@ class ProjectRecoveryGateTests(unittest.TestCase):
             "fault_injection_evidence": [],
             "production_ready": False,
         }
+        item.update(updates)
+        return item
+
+    def _complete_contract(self, **updates) -> dict:
+        item = self._contract(
+            recovery_mode="verified",
+            checkpoint_evidence=["proof.txt:checkpoint-marker"],
+            rollback_evidence=["proof.txt:rollback-marker"],
+            restore_test_evidence=["proof.txt:restore-marker"],
+            fault_injection_evidence=["proof.txt:fault-marker"],
+            production_ready=True,
+        )
         item.update(updates)
         return item
 
@@ -64,18 +81,44 @@ class ProjectRecoveryGateTests(unittest.TestCase):
             recovery.load_recovery_contracts(root)
 
     def test_verified_complete_contract_is_ready(self):
-        root = self._root(self._contract(
-            recovery_mode="verified",
-            checkpoint_evidence=["checkpoint PASS"],
-            rollback_evidence=["rollback PASS"],
-            restore_test_evidence=["restore PASS"],
-            fault_injection_evidence=["FI-001 PASS"],
-            production_ready=True,
-        ))
+        root = self._root(self._complete_contract())
         ready, blockers = recovery.recovery_readiness(root, "demo")
         self.assertTrue(ready)
         self.assertEqual(blockers, [])
         self.assertEqual(recovery.require_recovery_ready(root, "demo")["recovery_mode"], "verified")
+
+    def test_missing_evidence_file_is_rejected(self):
+        contract = self._complete_contract(
+            checkpoint_evidence=["missing.txt:checkpoint-marker"]
+        )
+        root = self._root(contract)
+        with self.assertRaisesRegex(recovery.RecoveryGateError, "missing or escaped"):
+            recovery.load_recovery_contracts(root)
+
+    def test_stale_evidence_marker_is_rejected(self):
+        contract = self._complete_contract(
+            rollback_evidence=["proof.txt:not-present-marker"]
+        )
+        root = self._root(contract)
+        with self.assertRaisesRegex(recovery.RecoveryGateError, "stale rollback_evidence evidence marker"):
+            recovery.load_recovery_contracts(root)
+
+    def test_symlink_evidence_is_rejected(self):
+        contract = self._complete_contract(
+            restore_test_evidence=["proof-link.txt:restore-marker"]
+        )
+        root = self._root(contract)
+        os.symlink(root / "proof.txt", root / "proof-link.txt")
+        with self.assertRaisesRegex(recovery.RecoveryGateError, "symlink restore_test_evidence evidence rejected"):
+            recovery.load_recovery_contracts(root)
+
+    def test_parent_escape_evidence_is_rejected(self):
+        contract = self._complete_contract(
+            fault_injection_evidence=["../outside.txt:fault-marker"]
+        )
+        root = self._root(contract)
+        with self.assertRaisesRegex(recovery.RecoveryGateError, "unsafe fault_injection_evidence evidence path"):
+            recovery.load_recovery_contracts(root)
 
     def test_repository_records_all_current_projects_but_none_as_production_ready(self):
         loaded = recovery.load_recovery_contracts(ROOT)
