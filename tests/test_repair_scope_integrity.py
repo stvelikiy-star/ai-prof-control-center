@@ -18,12 +18,14 @@ class RepairScopeIntegrityTests(unittest.TestCase):
         self.project = Path(self.tmp.name) / "project"
         (self.project / "src").mkdir(parents=True)
         (self.project / "tests").mkdir()
+        (self.project / "scripts").mkdir()
         (self.project / "supabase" / "migrations").mkdir(parents=True)
         (self.project / "automation" / "n8n").mkdir(parents=True)
         (self.project / "systemd").mkdir()
         (self.project / ".github" / "workflows").mkdir(parents=True)
         (self.project / "src" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
         (self.project / "tests" / "test_app.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+        (self.project / "scripts" / "check-release.py").write_text("print('ok')\n", encoding="utf-8")
         (self.project / "package.json").write_text('{"scripts":{"test":"true"}}\n', encoding="utf-8")
         (self.project / "tsconfig.json").write_text("{}\n", encoding="utf-8")
         (self.project / "supabase" / "migrations" / "001.sql").write_text("select 1;\n", encoding="utf-8")
@@ -35,6 +37,7 @@ class RepairScopeIntegrityTests(unittest.TestCase):
             "allowed_scope": [
                 "src/**",
                 "tests/**",
+                "scripts/**",
                 "package.json",
                 "tsconfig.json",
                 "supabase/migrations/**",
@@ -50,6 +53,7 @@ class RepairScopeIntegrityTests(unittest.TestCase):
             "evidence": [
                 {"source": "src/app.py"},
                 {"source": "tests/test_app.py"},
+                {"source": "scripts/check-release.py"},
                 {"source": "package.json"},
                 {"source": "tsconfig.json"},
                 {"source": "supabase/migrations/001.sql"},
@@ -63,6 +67,7 @@ class RepairScopeIntegrityTests(unittest.TestCase):
     def test_only_test_or_toolchain_evidence_fails_closed(self):
         for source in (
             "tests/test_app.py",
+            "scripts/check-release.py",
             "package.json",
             "tsconfig.json",
             "supabase/migrations/001.sql",
