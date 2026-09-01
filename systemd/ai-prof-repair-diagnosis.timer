@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI PROF Repair Team shadow diagnosis every two minutes
+
+[Timer]
+OnBootSec=75s
+OnUnitActiveSec=120s
+AccuracySec=10s
+Persistent=true
+Unit=ai-prof-repair-diagnosis.service
+
+[Install]
+WantedBy=timers.target
