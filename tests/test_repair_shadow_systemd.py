@@ -15,13 +15,14 @@ class RepairShadowSystemdTests(unittest.TestCase):
         cls.service = SERVICE.read_text(encoding="utf-8")
         cls.timer = TIMER.read_text(encoding="utf-8")
 
-    def test_service_runs_only_bounded_diagnosis_and_task_bridge_drains(self):
+    def test_service_runs_only_bounded_shadow_pipeline(self):
         exec_lines = [
             line for line in self.service.splitlines() if line.startswith("ExecStart=")
         ]
-        self.assertEqual(len(exec_lines), 2)
+        self.assertEqual(len(exec_lines), 3)
         self.assertIn("orchestrator/diagnosis_queue_drain.py", exec_lines[0])
         self.assertIn("orchestrator/repair_task_bridge_drain.py", exec_lines[1])
+        self.assertIn("orchestrator/shadow_queue_health.py", exec_lines[2])
         joined = "\n".join(exec_lines).lower()
         for forbidden in (
             "release_flow",
@@ -95,7 +96,8 @@ class RepairShadowSystemdTests(unittest.TestCase):
         self.assertNotIn("repair_task_bridge.py", monitor)
         self.assertNotIn("diagnosis_queue_drain.py", monitor)
         self.assertNotIn("repair_task_bridge_drain.py", monitor)
-        self.assertIn("incident_engine_canary.py", monitor)
+        self.assertNotIn("shadow_queue_health.py\n", monitor)
+        self.assertIn("incident_engine_shadow_health_canary.py", monitor)
         self.assertIn("diagnosis_packet_canary.py", monitor)
 
 
