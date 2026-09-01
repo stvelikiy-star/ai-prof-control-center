@@ -128,6 +128,12 @@ def _fresh_age_seconds(raw_timestamp: str, path: Path) -> float:
     return age
 
 
+def _nonnegative_count(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ActivationError(f"shadow queue health counter invalid: {field}")
+    return value
+
+
 def verify_shadow_queue_health_evidence() -> dict[str, Any]:
     path = base.STATE_ROOT / SHADOW_HEALTH_RELATIVE
     if path.is_symlink() or not path.is_file():
@@ -148,19 +154,42 @@ def verify_shadow_queue_health_evidence() -> dict[str, Any]:
         raise ActivationError("shadow queue health is degraded after diagnosis activation")
     if not isinstance(payload.get("thresholds"), dict):
         raise ActivationError("shadow queue health thresholds invalid")
-    if not isinstance(payload.get("diagnosis"), dict) or not isinstance(payload.get("bridge"), dict):
+    diagnosis = payload.get("diagnosis")
+    bridge = payload.get("bridge")
+    if not isinstance(diagnosis, dict) or not isinstance(bridge, dict):
         raise ActivationError("shadow queue health queue summaries invalid")
     reasons = payload.get("reasons")
     if reasons != []:
         raise ActivationError("healthy shadow queue health contains degradation reasons")
+
+    diagnosis_pending = _nonnegative_count(diagnosis.get("pending_count"), "diagnosis.pending_count")
+    diagnosis_blocked = _nonnegative_count(
+        diagnosis.get("blocked_open_count"), "diagnosis.blocked_open_count"
+    )
+    bridge_unprocessed = _nonnegative_count(
+        bridge.get("unprocessed_count"), "bridge.unprocessed_count"
+    )
+    bridge_blocked = _nonnegative_count(
+        bridge.get("blocked_open_count"), "bridge.blocked_open_count"
+    )
     return {
         "state": "healthy",
         "age_seconds": round(age, 3),
-        "diagnosis_pending": payload["diagnosis"].get("pending_count", 0),
-        "diagnosis_blocked_open": payload["diagnosis"].get("blocked_open_count", 0),
-        "bridge_unprocessed": payload["bridge"].get("unprocessed_count", 0),
-        "bridge_blocked_open": payload["bridge"].get("blocked_open_count", 0),
+        "diagnosis_pending": diagnosis_pending,
+        "diagnosis_blocked_open": diagnosis_blocked,
+        "bridge_unprocessed": bridge_unprocessed,
+        "bridge_blocked_open": bridge_blocked,
     }
+
+
+def _require_timer_ready(timer: str) -> dict[str, str]:
+    enabled = base.systemd_state("is-enabled", timer)
+    active = base.systemd_state("is-active", timer)
+    if enabled != "enabled" or active != "active":
+        raise ActivationError(
+            f"Repair Team timer not ready after activation: {timer}: enabled={enabled}, active={active}"
+        )
+    return {"enabled": enabled, "active": active}
 
 
 def verify_post_activation(approved_sha: str, phase: str, before_status: str) -> dict[str, Any]:
@@ -168,15 +197,21 @@ def verify_post_activation(approved_sha: str, phase: str, before_status: str) ->
         raise ActivationError("Repair Team activation changed live Git identity")
     if base.git("status", "--porcelain") != before_status:
         raise ActivationError("Repair Team activation changed live worktree")
-    if phase == "monitor":
-        return base.verify_monitor_evidence()
 
+    monitor_timer = _require_timer_ready(base.MONITOR_TIMER)
     monitor = base.verify_monitor_evidence()
+    if phase == "monitor":
+        return {
+            "monitor_timer": monitor_timer,
+            "monitor": monitor,
+        }
+
+    diagnosis_timer = _require_timer_ready(base.DIAGNOSIS_TIMER)
     base.verify_zero_privileged_bindings()
     shadow = verify_shadow_queue_health_evidence()
     return {
-        "monitor_timer": base.systemd_state("is-active", base.MONITOR_TIMER),
-        "diagnosis_timer": base.systemd_state("is-active", base.DIAGNOSIS_TIMER),
+        "monitor_timer": monitor_timer,
+        "diagnosis_timer": diagnosis_timer,
         "privileged_bindings": 0,
         "monitor": monitor,
         "shadow_queue_health": shadow,
