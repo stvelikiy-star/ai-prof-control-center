@@ -6,6 +6,8 @@ never runs Codex itself, and never performs restart/deploy/merge/migration.
 Every generated task uses the existing Task Schema V2 / submit_task safety
 contract, project allowlists, branch rules, trusted test contract, required
 checks, and downstream Stage01A -> repair -> independent Codex audit pipeline.
+Validated OWNER_ACTION_REQUIRED diagnoses are terminalized without creating a
+repair task; they are expected policy outcomes, not bridge failures.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ BRIDGE_VERSION = 1
 RESULT_LIMIT = 128 * 1024
 INCIDENT_ID_RE = diagnosis_runner.INCIDENT_ID_RE
 REPAIR_ACTIONS = {"PREPARE_REPAIR_FOR_OWNER_REVIEW", "GREEN_RUNBOOK_CANDIDATE"}
+TERMINAL_ACTIONS = {"OWNER_ACTION_REQUIRED"}
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,79}$")
 
 AUTOMATIC_REPAIR_DENY_PREFIXES = (
@@ -166,7 +169,11 @@ def _automatic_repair_scope_allowed(source: str) -> bool:
     return True
 
 
-def _validate_result(root: Path, state_root: Path, payload: dict) -> tuple[dict, str, list[str]]:
+def _validate_result(
+    root: Path,
+    state_root: Path,
+    payload: dict,
+) -> tuple[dict, str, list[str], str]:
     required = {
         "version", "diagnosed_at", "project_id", "probe_id", "response_class",
         "effective_next_action", "eligible_runbooks", "diagnosis",
@@ -206,11 +213,11 @@ def _validate_result(root: Path, state_root: Path, payload: dict) -> tuple[dict,
         raise RepairBridgeError("eligible runbooks invalid")
     if payload.get("effective_next_action") != expected_action or sorted(listed_runbooks) != sorted(expected_runbooks):
         raise RepairBridgeError("diagnosis effective action is stale or tampered")
-    if expected_action not in REPAIR_ACTIONS:
-        raise RepairBridgeError(f"diagnosis is not eligible for code repair task: {expected_action}")
-    if parsed_diagnosis.get("suggested_action") != "CODE_REPAIR":
+    if expected_action not in REPAIR_ACTIONS | TERMINAL_ACTIONS:
+        raise RepairBridgeError(f"unsupported diagnosis terminal/action state: {expected_action}")
+    if expected_action in REPAIR_ACTIONS and parsed_diagnosis.get("suggested_action") != "CODE_REPAIR":
         raise RepairBridgeError("non-code diagnosis must use a registered operations path")
-    return parsed_diagnosis, current_class, expected_runbooks
+    return parsed_diagnosis, current_class, expected_runbooks, expected_action
 
 
 def _scope_from_evidence(project: dict, diagnosis: dict) -> list[str]:
@@ -275,6 +282,29 @@ def _write_bridge_record(state_root: Path, incident_id: str, task_id: str, diagn
     return destination
 
 
+def _write_terminal_record(
+    state_root: Path,
+    incident_id: str,
+    diagnosis_sha256: str,
+    response_class: str,
+    effective_next_action: str,
+) -> Path:
+    if effective_next_action not in TERMINAL_ACTIONS:
+        raise RepairBridgeError("attempted to terminalize non-terminal diagnosis action")
+    destination = state_root / "repair_bridge" / "terminal" / f"{incident_id}.json"
+    payload = {
+        "version": BRIDGE_VERSION,
+        "incident_id": incident_id,
+        "diagnosis_sha256": diagnosis_sha256,
+        "response_class": response_class,
+        "effective_next_action": effective_next_action,
+        "task_created": False,
+        "owner_action_required": True,
+    }
+    _atomic_write(destination, json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+    return destination
+
+
 def _write_blocked(state_root: Path, incident_id: str, error: Exception) -> Path:
     destination = state_root / "repair_bridge" / "blocked" / f"{incident_id}.json"
     payload = {"version": BRIDGE_VERSION, "incident_id": incident_id,
@@ -287,8 +317,20 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
     fallback_id = result_path.stem if INCIDENT_ID_RE.fullmatch(result_path.stem) else "INVALID"
     try:
         payload, diagnosis_sha256 = _read_json(result_path)
-        diagnosis, response_class, runbooks = _validate_result(root, state_root, payload)
+        diagnosis, response_class, runbooks, effective_next_action = _validate_result(
+            root, state_root, payload
+        )
         incident_id = diagnosis["incident_id"]
+        if effective_next_action == "OWNER_ACTION_REQUIRED":
+            terminal = _write_terminal_record(
+                state_root,
+                incident_id,
+                diagnosis_sha256,
+                response_class,
+                effective_next_action,
+            )
+            return BridgeResult(incident_id, "owner_action_required", "", str(terminal))
+
         projects = submit_task.read_registry(root)
         project_id = payload["project_id"]
         if project_id not in projects:
@@ -361,8 +403,9 @@ def process_once(root: Path, state_root: Path) -> BridgeResult | None:
     for path in sorted(results.glob("INC-*.json")):
         incident_id = path.stem
         record = state_root / "repair_bridge" / "tasks" / f"{incident_id}.json"
+        terminal = state_root / "repair_bridge" / "terminal" / f"{incident_id}.json"
         blocked = state_root / "repair_bridge" / "blocked" / f"{incident_id}.json"
-        if record.exists() or blocked.exists():
+        if record.exists() or terminal.exists() or blocked.exists():
             continue
         return bridge_result(root, state_root, path)
     return None
