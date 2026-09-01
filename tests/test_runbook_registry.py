@@ -13,7 +13,7 @@ import runbook_registry
 
 
 class RunbookRegistryTests(unittest.TestCase):
-    def _root(self, runbook: dict) -> Path:
+    def _root(self, runbook: dict, policy: str = "RED") -> Path:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -32,6 +32,10 @@ class RunbookRegistryTests(unittest.TestCase):
                 "enabled": True,
                 "probes": [{"id": "heartbeat", "kind": "path_exists", "path": "/tmp/demo"}],
             }}}), encoding="utf-8"
+        )
+        (root / "orchestrator" / "repair_policies.json").write_text(
+            json.dumps({"version": 1, "projects": {"demo": {"heartbeat": policy}}}),
+            encoding="utf-8",
         )
         (root / "orchestrator" / "repair_runbooks.json").write_text(
             json.dumps({"version": 1, "runbooks": [runbook]}), encoding="utf-8"
@@ -54,7 +58,7 @@ class RunbookRegistryTests(unittest.TestCase):
         }
 
     def test_draft_yellow_is_valid_but_not_green_eligible(self):
-        root = self._root(self._base())
+        root = self._root(self._base(), policy="YELLOW")
         loaded = runbook_registry.load_runbooks(root)
         self.assertIn("DEMO_HEARTBEAT_V1", loaded)
         self.assertEqual(runbook_registry.eligible_green_runbooks(root, "demo", "heartbeat"), [])
@@ -62,7 +66,7 @@ class RunbookRegistryTests(unittest.TestCase):
     def test_green_without_evidence_is_rejected(self):
         item = self._base()
         item.update({"status": "verified", "response_class": "GREEN", "rollback_verified": True})
-        root = self._root(item)
+        root = self._root(item, policy="GREEN")
         with self.assertRaises(runbook_registry.RunbookError):
             runbook_registry.load_runbooks(root)
 
@@ -74,11 +78,11 @@ class RunbookRegistryTests(unittest.TestCase):
             "fault_injection_evidence": ["FI-001 PASS"],
             "rollback_verified": False,
         })
-        root = self._root(item)
+        root = self._root(item, policy="GREEN")
         with self.assertRaises(runbook_registry.RunbookError):
             runbook_registry.load_runbooks(root)
 
-    def test_verified_green_with_evidence_is_eligible(self):
+    def test_verified_green_runbook_is_blocked_by_red_policy(self):
         item = self._base()
         item.update({
             "status": "verified",
@@ -86,7 +90,18 @@ class RunbookRegistryTests(unittest.TestCase):
             "fault_injection_evidence": ["FI-001 PASS"],
             "rollback_verified": True,
         })
-        root = self._root(item)
+        root = self._root(item, policy="RED")
+        self.assertEqual(runbook_registry.eligible_green_runbooks(root, "demo", "heartbeat"), [])
+
+    def test_verified_green_with_green_policy_is_eligible(self):
+        item = self._base()
+        item.update({
+            "status": "verified",
+            "response_class": "GREEN",
+            "fault_injection_evidence": ["FI-001 PASS"],
+            "rollback_verified": True,
+        })
+        root = self._root(item, policy="GREEN")
         eligible = runbook_registry.eligible_green_runbooks(root, "demo", "heartbeat")
         self.assertEqual(len(eligible), 1)
 
