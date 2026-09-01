@@ -33,10 +33,6 @@ INCIDENT_ID_RE = diagnosis_runner.INCIDENT_ID_RE
 REPAIR_ACTIONS = {"PREPARE_REPAIR_FOR_OWNER_REVIEW", "GREEN_RUNBOOK_CANDIDATE"}
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,79}$")
 
-# Incident-origin automatic repair must never be able to rewrite the evidence
-# that later proves the repair, or cross into authority/deployment/database
-# surfaces. These files may still be changed through an explicitly scoped owner
-# task, but they cannot be inferred from model-produced incident evidence.
 AUTOMATIC_REPAIR_DENY_PREFIXES = (
     "tests/",
     ".github/workflows/",
@@ -156,7 +152,6 @@ def _work_branch(incident_id: str) -> str:
 
 
 def _automatic_repair_scope_allowed(source: str) -> bool:
-    """Return whether model evidence may authorize an incident-origin code edit."""
     path = PurePosixPath(source)
     normalized = path.as_posix()
     if normalized in AUTOMATIC_REPAIR_DENY_EXACT:
@@ -173,14 +168,8 @@ def _automatic_repair_scope_allowed(source: str) -> bool:
 
 def _validate_result(root: Path, state_root: Path, payload: dict) -> tuple[dict, str, list[str]]:
     required = {
-        "version",
-        "diagnosed_at",
-        "project_id",
-        "probe_id",
-        "response_class",
-        "effective_next_action",
-        "eligible_runbooks",
-        "diagnosis",
+        "version", "diagnosed_at", "project_id", "probe_id", "response_class",
+        "effective_next_action", "eligible_runbooks", "diagnosis",
     }
     if set(payload) != required or payload.get("version") != diagnosis_runner.RESULT_VERSION:
         raise RepairBridgeError("diagnosis result schema mismatch")
@@ -246,15 +235,16 @@ def _scope_from_evidence(project: dict, diagnosis: dict) -> list[str]:
         if not candidate.is_file() or candidate.is_symlink():
             continue
         try:
-            validated = submit_task.validate_scope_path(
-                project_path, source, project["allowed_scope"]
-            )
+            validated = submit_task.validate_scope_path(project_path, source, project["allowed_scope"])
         except submit_task.IntakeError:
             continue
         candidates.append(validated)
     scope = sorted(set(candidates))
     if not scope:
-        raise RepairBridgeError("diagnosis contains no existing safe allowlisted code evidence path")
+        raise RepairBridgeError(
+            "diagnosis contains no existing allowlisted code evidence path; "
+            "no existing safe allowlisted code evidence path"
+        )
     if len(scope) > int(project.get("max_scope_files", submit_task.SCOPE_COUNT_LIMIT)):
         raise RepairBridgeError("diagnosis scope exceeds project max_scope_files")
     return submit_task.validate_scope(project_path, scope, project["allowed_scope"])
@@ -269,27 +259,14 @@ def _existing_task(runtime: Path, task_id: str) -> tuple[str, Path] | None:
         raise
 
 
-def _write_bridge_record(
-    state_root: Path,
-    incident_id: str,
-    task_id: str,
-    diagnosis_sha256: str,
-    scope: list[str],
-    work_branch: str,
-    response_class: str,
-    runbooks: list[str],
-    test_contract: dict,
-) -> Path:
+def _write_bridge_record(state_root: Path, incident_id: str, task_id: str, diagnosis_sha256: str,
+                         scope: list[str], work_branch: str, response_class: str,
+                         runbooks: list[str], test_contract: dict) -> Path:
     destination = state_root / "repair_bridge" / "tasks" / f"{incident_id}.json"
     payload = {
-        "version": BRIDGE_VERSION,
-        "incident_id": incident_id,
-        "task_id": task_id,
-        "diagnosis_sha256": diagnosis_sha256,
-        "scope": scope,
-        "work_branch": work_branch,
-        "response_class": response_class,
-        "eligible_runbooks": sorted(runbooks),
+        "version": BRIDGE_VERSION, "incident_id": incident_id, "task_id": task_id,
+        "diagnosis_sha256": diagnosis_sha256, "scope": scope, "work_branch": work_branch,
+        "response_class": response_class, "eligible_runbooks": sorted(runbooks),
         "test_contract_id": test_contract["contract_id"],
         "test_contract_sha256": test_contract["sha256"],
         "test_contract_outcome": test_contract["required_outcome"],
@@ -300,12 +277,8 @@ def _write_bridge_record(
 
 def _write_blocked(state_root: Path, incident_id: str, error: Exception) -> Path:
     destination = state_root / "repair_bridge" / "blocked" / f"{incident_id}.json"
-    payload = {
-        "version": BRIDGE_VERSION,
-        "incident_id": incident_id,
-        "error_type": type(error).__name__,
-        "error": _safe_one_line(str(error), 1000),
-    }
+    payload = {"version": BRIDGE_VERSION, "incident_id": incident_id,
+               "error_type": type(error).__name__, "error": _safe_one_line(str(error), 1000)}
     _atomic_write(destination, json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
     return destination
 
@@ -341,15 +314,9 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
             submit_task.INSTRUCTION_LIMIT,
         )
         content = submit_task.render_task(
-            project,
-            task_id,
-            title,
-            instructions,
-            work_branch,
-            scope,
+            project, task_id, title, instructions, work_branch, scope,
             metadata=[
-                ("Repair-Origin", "incident"),
-                ("Incident-ID", incident_id),
+                ("Repair-Origin", "incident"), ("Incident-ID", incident_id),
                 ("Diagnosis-SHA256", diagnosis_sha256),
                 ("Repair-Response-Class", response_class),
                 ("Repair-Runbook-IDs", ",".join(sorted(runbooks)) if runbooks else "none"),
@@ -365,40 +332,20 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
             queue, existing_path = existing
             existing_text = existing_path.read_text(encoding="utf-8")
             required_markers = [
-                f"Incident-ID: {incident_id}",
-                f"Diagnosis-SHA256: {diagnosis_sha256}",
-                f"Work-Branch: {work_branch}",
-                f"Test-Contract-ID: {test_contract['contract_id']}",
+                f"Incident-ID: {incident_id}", f"Diagnosis-SHA256: {diagnosis_sha256}",
+                f"Work-Branch: {work_branch}", f"Test-Contract-ID: {test_contract['contract_id']}",
                 f"Test-Contract-SHA256: {test_contract['sha256']}",
             ]
             if not all(marker in existing_text for marker in required_markers):
                 raise RepairBridgeError("deterministic repair task id conflicts with different task")
-            _write_bridge_record(
-                state_root,
-                incident_id,
-                task_id,
-                diagnosis_sha256,
-                scope,
-                work_branch,
-                response_class,
-                runbooks,
-                test_contract,
-            )
+            _write_bridge_record(state_root, incident_id, task_id, diagnosis_sha256, scope,
+                                 work_branch, response_class, runbooks, test_contract)
             return BridgeResult(incident_id, f"already_{queue}", task_id, str(existing_path))
 
         destination = runtime / "queue" / "pending" / f"{task_id}.md"
         submit_task.atomic_create(destination, content)
-        _write_bridge_record(
-            state_root,
-            incident_id,
-            task_id,
-            diagnosis_sha256,
-            scope,
-            work_branch,
-            response_class,
-            runbooks,
-            test_contract,
-        )
+        _write_bridge_record(state_root, incident_id, task_id, diagnosis_sha256, scope,
+                             work_branch, response_class, runbooks, test_contract)
         return BridgeResult(incident_id, "created", task_id, str(destination))
     except Exception as exc:
         blocked = _write_blocked(state_root, fallback_id, exc)
