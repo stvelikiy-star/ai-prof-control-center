@@ -5,7 +5,8 @@ This module reads only AI PROF state and writes one bounded health JSON record.
 It does not call an AI model, inspect secrets, mutate target projects, create
 repair tasks, or change authority. Historical blocked records do not keep the
 health permanently degraded: only blocked records bound to currently open
-incidents count as active blockers.
+incidents count as active blockers. Valid owner-action bridge terminals count
+as processed diagnosis outcomes and therefore do not create false backlog.
 """
 from __future__ import annotations
 
@@ -112,10 +113,17 @@ def build_snapshot(state_root: Path, *, now: datetime | None = None) -> dict:
     ]
     diagnosis_results = _json_files(state_root / "diagnosis" / "results")
     bridge_tasks = {path.stem for path in _json_files(state_root / "repair_bridge" / "tasks")}
+    bridge_terminals = {path.stem for path in _json_files(state_root / "repair_bridge" / "terminal")}
     bridge_blocked_files = _json_files(state_root / "repair_bridge" / "blocked")
     bridge_blocked = [path for path in bridge_blocked_files if path.stem in open_ids]
-    bridged_or_blocked = bridge_tasks | {path.stem for path in bridge_blocked_files}
-    bridge_unprocessed = [path for path in diagnosis_results if path.stem not in bridged_or_blocked]
+    processed_bridge_results = (
+        bridge_tasks
+        | bridge_terminals
+        | {path.stem for path in bridge_blocked_files}
+    )
+    bridge_unprocessed = [
+        path for path in diagnosis_results if path.stem not in processed_bridge_results
+    ]
 
     diagnosis_oldest = _oldest_age_seconds(diagnosis_pending, now_epoch)
     bridge_oldest = _oldest_age_seconds(bridge_unprocessed, now_epoch)
