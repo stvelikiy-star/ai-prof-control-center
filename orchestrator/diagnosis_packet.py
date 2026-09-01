@@ -3,7 +3,8 @@
 
 This module does not call an AI model and does not mutate target projects. It
 creates the evidence envelope that a future read-only diagnosis runner can
-consume safely.
+consume safely. Packets for recovered incidents are removed from the pending
+set so a later runner cannot diagnose a stale incident.
 """
 from __future__ import annotations
 
@@ -107,20 +108,41 @@ def build_packet(root: Path, state_root: Path, incident: dict) -> dict:
     }
 
 
+def _archive_stale_pending(state_root: Path, active_ids: set[str]) -> None:
+    pending = state_root / "diagnosis" / "pending"
+    resolved = state_root / "diagnosis" / "resolved"
+    if not pending.is_dir():
+        return
+    resolved.mkdir(parents=True, exist_ok=True)
+    for path in sorted(pending.glob("INC-*.json")):
+        if path.is_symlink():
+            raise DiagnosisPacketError(f"symlink diagnosis packet rejected: {path}")
+        if path.stem in active_ids:
+            continue
+        destination = resolved / path.name
+        if destination.exists():
+            path.unlink()
+        else:
+            os.replace(path, destination)
+
+
 def generate_packets(root: Path, state_root: Path) -> list[Path]:
     summary = incident_summary(state_root)
     destinations: list[Path] = []
+    active_ids: set[str] = set()
     for incident in summary.get("open_incidents", []):
         packet = build_packet(root, state_root, incident)
         incident_id = packet.get("incident_id")
         if not isinstance(incident_id, str) or not incident_id:
             raise DiagnosisPacketError("incident_id missing")
+        active_ids.add(incident_id)
         destination = state_root / "diagnosis" / "pending" / f"{incident_id}.json"
         _atomic_write(
             destination,
             json.dumps(packet, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         )
         destinations.append(destination)
+    _archive_stale_pending(state_root, active_ids)
     return destinations
 
 
