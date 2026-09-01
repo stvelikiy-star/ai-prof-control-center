@@ -120,6 +120,23 @@ class IncidentCorrelationEvidenceTests(unittest.TestCase):
             "heartbeat",
         )
 
+    def test_malformed_incident_summary_fails_closed(self):
+        current = incident("INC-DEMO-AAAAAAAAAA", "demo", "runtime")
+        original_packet = {"incident": {"fingerprint": "demo:runtime"}}
+        with (
+            mock.patch.object(canary, "_ORIGINAL_BUILD_PACKET", return_value=original_packet),
+            mock.patch.object(
+                base,
+                "incident_summary",
+                return_value={"open_incidents": "not-a-list"},
+            ),
+        ):
+            with self.assertRaisesRegex(
+                base.DiagnosisPacketError,
+                "open_incidents must be a list",
+            ):
+                canary.build_packet(Path("/control"), Path("/state"), current)
+
     def test_diagnosis_protocol_accepts_and_prompt_contains_nested_correlation(self):
         packet = {
             "version": 1,
