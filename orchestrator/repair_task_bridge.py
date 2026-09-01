@@ -4,8 +4,8 @@
 This bridge creates *code repair tasks only*. It never edits a target project,
 never runs Codex itself, and never performs restart/deploy/merge/migration.
 Every generated task uses the existing Task Schema V2 / submit_task safety
-contract, project allowlists, branch rules, required checks, and downstream
-Stage01A -> repair -> independent Codex audit pipeline.
+contract, project allowlists, branch rules, trusted test contract, required
+checks, and downstream Stage01A -> repair -> independent Codex audit pipeline.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from pathlib import Path
 import incident_diagnosis_runner as diagnosis_runner
 import submit_task
 from incident_engine import summary as incident_summary
+from project_test_contracts import contract_for_project
 from repair_policy import classify
 from runtime_paths import initialize
 
@@ -174,7 +175,7 @@ def _scope_from_evidence(project: dict, diagnosis: dict) -> list[str]:
             continue
         candidate = project_path / source
         try:
-            info = candidate.lstat()
+            candidate.lstat()
         except OSError:
             continue
         if not candidate.is_file() or candidate.is_symlink():
@@ -212,6 +213,7 @@ def _write_bridge_record(
     work_branch: str,
     response_class: str,
     runbooks: list[str],
+    test_contract: dict,
 ) -> Path:
     destination = state_root / "repair_bridge" / "tasks" / f"{incident_id}.json"
     payload = {
@@ -223,6 +225,9 @@ def _write_bridge_record(
         "work_branch": work_branch,
         "response_class": response_class,
         "eligible_runbooks": sorted(runbooks),
+        "test_contract_id": test_contract["contract_id"],
+        "test_contract_sha256": test_contract["sha256"],
+        "test_contract_outcome": test_contract["required_outcome"],
     }
     _atomic_write(destination, json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
     return destination
@@ -251,6 +256,7 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
         if project_id not in projects:
             raise RepairBridgeError("diagnosis project is not registered for task intake")
         project = projects[project_id]
+        test_contract = contract_for_project(root, project_id)
         scope = _scope_from_evidence(project, diagnosis)
         task_id = _task_id(project_id, incident_id)
         work_branch = _work_branch(incident_id)
@@ -281,6 +287,9 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
                 ("Diagnosis-SHA256", diagnosis_sha256),
                 ("Repair-Response-Class", response_class),
                 ("Repair-Runbook-IDs", ",".join(sorted(runbooks)) if runbooks else "none"),
+                ("Test-Contract-ID", test_contract["contract_id"]),
+                ("Test-Contract-SHA256", test_contract["sha256"]),
+                ("Test-Contract-Outcome", test_contract["required_outcome"]),
             ],
         )
 
@@ -293,20 +302,36 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
                 f"Incident-ID: {incident_id}",
                 f"Diagnosis-SHA256: {diagnosis_sha256}",
                 f"Work-Branch: {work_branch}",
+                f"Test-Contract-ID: {test_contract['contract_id']}",
+                f"Test-Contract-SHA256: {test_contract['sha256']}",
             ]
             if not all(marker in existing_text for marker in required_markers):
                 raise RepairBridgeError("deterministic repair task id conflicts with different task")
             _write_bridge_record(
-                state_root, incident_id, task_id, diagnosis_sha256, scope, work_branch,
-                response_class, runbooks,
+                state_root,
+                incident_id,
+                task_id,
+                diagnosis_sha256,
+                scope,
+                work_branch,
+                response_class,
+                runbooks,
+                test_contract,
             )
             return BridgeResult(incident_id, f"already_{queue}", task_id, str(existing_path))
 
         destination = runtime / "queue" / "pending" / f"{task_id}.md"
         submit_task.atomic_create(destination, content)
         _write_bridge_record(
-            state_root, incident_id, task_id, diagnosis_sha256, scope, work_branch,
-            response_class, runbooks,
+            state_root,
+            incident_id,
+            task_id,
+            diagnosis_sha256,
+            scope,
+            work_branch,
+            response_class,
+            runbooks,
+            test_contract,
         )
         return BridgeResult(incident_id, "created", task_id, str(destination))
     except Exception as exc:

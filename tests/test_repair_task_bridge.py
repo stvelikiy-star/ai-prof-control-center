@@ -60,6 +60,7 @@ class RepairTaskBridgeTests(unittest.TestCase):
         self._write_monitoring()
         self._write_policy("YELLOW")
         self._write_runbooks([])
+        self._write_test_contract()
 
         self.codex = self.base / "codex"
         self.codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -83,7 +84,7 @@ class RepairTaskBridgeTests(unittest.TestCase):
                 "require_clean_repository": True,
                 "max_scope_files": 20,
                 "code_required_commands": ["git", "python3"],
-                "code_required_checks": [],
+                "code_required_checks": ["python3 -m unittest"],
             }]}),
             encoding="utf-8",
         )
@@ -111,6 +112,18 @@ class RepairTaskBridgeTests(unittest.TestCase):
     def _write_runbooks(self, runbooks: list[dict]):
         (self.root / "orchestrator" / "repair_runbooks.json").write_text(
             json.dumps({"version": 1, "runbooks": runbooks}), encoding="utf-8"
+        )
+
+    def _write_test_contract(self):
+        (self.root / "orchestrator" / "project_test_contracts.json").write_text(
+            json.dumps({"version": 1, "contracts": [{
+                "contract_id": "DEMO_CODE_V1",
+                "project_id": "demo",
+                "kind": "code_repair",
+                "required_checks": ["python3 -m unittest"],
+                "required_outcome": "STAGE_01C_AUDIT_PASS",
+            }]}),
+            encoding="utf-8",
         )
 
     def _green_runbook(self):
@@ -194,6 +207,10 @@ class RepairTaskBridgeTests(unittest.TestCase):
         self.assertTrue(values["Incident-ID"].startswith("INC-DEMO-"))
         self.assertRegex(values["Diagnosis-SHA256"], r"^[0-9a-f]{64}$")
         self.assertEqual(values["Repair-Response-Class"], "YELLOW")
+        self.assertEqual(values["Test-Contract-ID"], "DEMO_CODE_V1")
+        self.assertRegex(values["Test-Contract-SHA256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(values["Test-Contract-Outcome"], "STAGE_01C_AUDIT_PASS")
+        self.assertEqual(values["Required-Checks"], "python3 -m unittest")
         self.assertIn("deployment", values["Out-of-Scope"])
 
     def test_bridge_is_exactly_once_across_existing_queue_task(self):
@@ -204,6 +221,18 @@ class RepairTaskBridgeTests(unittest.TestCase):
         self.assertEqual(second.status, "already_pending")
         pending = list((self.state / "queue" / "pending").glob("*.md"))
         self.assertEqual(len(pending), 1)
+
+    def test_test_contract_drift_blocks_task_creation(self):
+        diagnosis_result = self._diagnose()
+        contract_path = self.root / "orchestrator" / "project_test_contracts.json"
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        payload["contracts"][0]["required_checks"] = ["python3 -m unittest", "bash -c unsafe"]
+        contract_path.write_text(json.dumps(payload), encoding="utf-8")
+        result = bridge.bridge_result(self.root, self.state, diagnosis_result)
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(list((self.state / "queue" / "pending").glob("*.md")), [])
+        blocked = json.loads(Path(result.path).read_text(encoding="utf-8"))
+        self.assertIn("test contract drift", blocked["error"])
 
     def test_evidence_outside_allowlist_cannot_become_scope(self):
         other = self.project / "private.txt"
@@ -248,6 +277,7 @@ class RepairTaskBridgeTests(unittest.TestCase):
         text = Path(result.path).read_text(encoding="utf-8")
         self.assertIn("Repair-Response-Class: GREEN", text)
         self.assertIn("Repair-Runbook-IDs: DEMO_RUNTIME_REPAIR_V1", text)
+        self.assertIn("Test-Contract-ID: DEMO_CODE_V1", text)
 
     def test_service_restart_diagnosis_is_not_converted_to_code_task(self):
         diagnosis_result = self._diagnose(action="SERVICE_RESTART")
