@@ -28,7 +28,10 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "control"
         self.project = Path(self.tmp.name) / "project"
         (self.root / "orchestrator").mkdir(parents=True)
-        self.project.mkdir()
+        (self.project / "src").mkdir(parents=True)
+        (self.project / "tests").mkdir()
+        (self.project / "src" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (self.project / "tests" / "test_app.py").write_text("def test_ok(): pass\n", encoding="utf-8")
         self._write_registry(["python3 -m unittest"])
         self._write_contract("DEMO_CODE_V1", ["python3 -m unittest"])
 
@@ -43,7 +46,7 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
                 "allowed_base_branches": ["main"],
                 "local_integration_branches": [],
                 "work_prefixes": ["feature/", "fix/"],
-                "allowed_scope": ["src/**"],
+                "allowed_scope": ["src/**", "tests/**"],
                 "forbidden_scope": [".git/**"],
                 "agent_context": "agents/demo",
                 "allow_commits": False,
@@ -81,6 +84,7 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
             "Execution-Mode": "code",
             "Project-Path": str(self.project),
             "Required-Checks": ", ".join(contract["required_checks"]),
+            "Scope-Files": "src/app.py",
             "Repair-Origin": "incident",
             "Incident-ID": "INC-DEMO-ABCDEF1234",
             "Diagnosis-SHA256": "a" * 64,
@@ -91,7 +95,7 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
             "Test-Contract-Outcome": contract["required_outcome"],
         }
 
-    def test_exact_current_contract_passes(self):
+    def test_exact_current_contract_and_scope_pass(self):
         orch.validate_incident_repair_contract(self.root, self._incident_data())
 
     def test_contract_change_after_task_creation_blocks(self):
@@ -103,10 +107,7 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
     def test_registry_check_change_after_task_creation_blocks(self):
         data = self._incident_data()
         self._write_registry(["python3 -m unittest", "python3 -m compileall -q src"])
-        self._write_contract(
-            "DEMO_CODE_V2",
-            ["python3 -m unittest", "python3 -m compileall -q src"],
-        )
+        self._write_contract("DEMO_CODE_V2", ["python3 -m unittest", "python3 -m compileall -q src"])
         with self.assertRaisesRegex(RuntimeError, "BLOCKED_REPAIR_TEST_CONTRACT_DRIFT"):
             orch.validate_incident_repair_contract(self.root, data)
 
@@ -116,14 +117,28 @@ class IncidentRepairContractIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "required_checks"):
             orch.validate_incident_repair_contract(self.root, data)
 
+    def test_scope_tamper_to_test_file_blocks(self):
+        data = self._incident_data()
+        data["Scope-Files"] = "tests/test_app.py"
+        with self.assertRaisesRegex(RuntimeError, "BLOCKED_REPAIR_SCOPE_INTEGRITY"):
+            orch.validate_incident_repair_contract(self.root, data)
+
+    def test_scope_tamper_outside_current_allowlist_blocks(self):
+        data = self._incident_data()
+        data["Scope-Files"] = "private.txt"
+        with self.assertRaisesRegex(RuntimeError, "BLOCKED_REPAIR_SCOPE_INTEGRITY"):
+            orch.validate_incident_repair_contract(self.root, data)
+
+    def test_missing_scope_metadata_blocks(self):
+        data = self._incident_data()
+        del data["Scope-Files"]
+        with self.assertRaisesRegex(RuntimeError, "BLOCKED_REPAIR_TEST_CONTRACT_DRIFT"):
+            orch.validate_incident_repair_contract(self.root, data)
+
     def test_ordinary_task_is_unchanged(self):
         orch.validate_incident_repair_contract(
             self.root,
-            {
-                "Execution-Mode": "code",
-                "Project-Path": str(self.project),
-                "Required-Checks": "anything",
-            },
+            {"Execution-Mode": "code", "Project-Path": str(self.project), "Required-Checks": "anything"},
         )
 
     def test_reserved_metadata_without_incident_origin_blocks(self):
