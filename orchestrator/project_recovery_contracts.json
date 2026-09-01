@@ -4,7 +4,7 @@
     {
       "project_id": "ai-prof-control-center",
       "recovery_mode": "staged_activation",
-      "verification_level": "unit",
+      "verification_level": "shadow",
       "checkpoint_evidence": [
         "scripts/activate_mobile_control_v1.py:def create_checkpoint"
       ],
@@ -14,7 +14,9 @@
       "restore_test_evidence": [
         "tests/test_mobile_control_activation.py:test_rollback_checkpoint_contains_git_bundle_and_units"
       ],
-      "fault_injection_evidence": [],
+      "fault_injection_evidence": [
+        "tests/test_repair_team_shadow_fault_injection.py:test_shadow_fault_injection_exercises_real_incident_lifecycle"
+      ],
       "production_ready": false
     },
     {
