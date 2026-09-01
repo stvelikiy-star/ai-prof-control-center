@@ -5,13 +5,13 @@
       "project_id": "ai-prof-control-center",
       "recovery_mode": "staged_activation",
       "checkpoint_evidence": [
-        "scripts/activate_mobile_control_v1.py:create_checkpoint"
+        "scripts/activate_mobile_control_v1.py:def create_checkpoint"
       ],
       "rollback_evidence": [
-        "scripts/activate_mobile_control_v1.py:rollback"
+        "scripts/activate_mobile_control_v1.py:def rollback"
       ],
       "restore_test_evidence": [
-        "tests/test_mobile_control_activation.py"
+        "tests/test_mobile_control_activation.py:test_rollback_checkpoint_contains_git_bundle_and_units"
       ],
       "fault_injection_evidence": [],
       "production_ready": false
@@ -20,12 +20,12 @@
       "project_id": "ak-bermet",
       "recovery_mode": "prepare_only",
       "checkpoint_evidence": [
-        "orchestrator/projects.json:ak-bermet.release.backup_script"
+        "orchestrator/projects.json:ak-bermet-production-backup.sh"
       ],
       "rollback_evidence": [],
       "restore_test_evidence": [
         "orchestrator/ak_bermet_release_v6_prepare.py:validate_restore_smoke",
-        "tests/test_ak_bermet_release_v6_prepare.py"
+        "tests/test_ak_bermet_release_v6_prepare.py:validate_restore_smoke"
       ],
       "fault_injection_evidence": [],
       "production_ready": false
