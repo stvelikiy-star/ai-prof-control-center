@@ -1,19 +1,23 @@
 """Project-level recovery readiness gate for AI PROF Repair Team.
 
-This module records evidence only; it performs no backup, restore, rollback or
-deployment. A project is production recovery-ready only when the reviewed
-contract explicitly says so *and* contains checkpoint, rollback, restore-test,
-and fault-injection evidence. Unknown or partial recovery state fails closed.
+This module records and validates recovery evidence only; it performs no backup,
+restore, rollback or deployment. A project is production recovery-ready only
+when the reviewed contract explicitly says so *and* every checkpoint, rollback,
+restore-test and fault-injection evidence reference resolves to a real tracked
+source file containing the declared marker. Unknown, stale or partial recovery
+state fails closed.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from project_registry import load_projects, project_enabled
 
 CONTRACT_VERSION = 1
 ALLOWED_MODES = {"unverified", "prepare_only", "staged_activation", "verified"}
+MAX_EVIDENCE_FILE_BYTES = 2 * 1024 * 1024
 
 
 class RecoveryGateError(ValueError):
@@ -31,15 +35,75 @@ def _repair_capable_projects(projects: dict[str, dict]) -> set[str]:
     return result
 
 
-def _evidence_list(item: dict, key: str) -> list[str]:
+def _path_has_symlink(root: Path, relative: Path) -> bool:
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _verify_evidence_reference(root: Path, project_id: str, key: str, entry: str) -> str:
+    source, separator, marker = entry.partition(":")
+    if (
+        not separator
+        or not source
+        or not marker
+        or source != source.strip()
+        or marker != marker.strip()
+        or len(marker) < 4
+        or "\x00" in marker
+        or "\n" in marker
+        or "\r" in marker
+        or "\\" in source
+    ):
+        raise RecoveryGateError(f"invalid {key} evidence reference for {project_id}")
+    relative = Path(source)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise RecoveryGateError(f"unsafe {key} evidence path for {project_id}")
+
+    root_resolved = root.resolve(strict=True)
+    lexical = root_resolved / relative
+    if _path_has_symlink(root_resolved, relative):
+        raise RecoveryGateError(f"symlink {key} evidence rejected for {project_id}: {source}")
+    try:
+        candidate = lexical.resolve(strict=True)
+        candidate.relative_to(root_resolved)
+    except (OSError, ValueError) as exc:
+        raise RecoveryGateError(
+            f"missing or escaped {key} evidence for {project_id}: {source}"
+        ) from exc
+    try:
+        stat_result = candidate.stat()
+    except OSError as exc:
+        raise RecoveryGateError(f"cannot stat {key} evidence for {project_id}: {source}") from exc
+    if not candidate.is_file() or stat_result.st_size > MAX_EVIDENCE_FILE_BYTES:
+        raise RecoveryGateError(f"invalid {key} evidence file for {project_id}: {source}")
+    try:
+        text = candidate.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RecoveryGateError(f"unreadable {key} evidence for {project_id}: {source}") from exc
+    if marker not in text:
+        raise RecoveryGateError(
+            f"stale {key} evidence marker for {project_id}: {source}:{marker}"
+        )
+    return f"{source}:{marker}"
+
+
+def _evidence_list(root: Path, item: dict, key: str) -> list[str]:
     value = item.get(key)
+    project_id = item.get("project_id")
     if not isinstance(value, list) or not all(
         isinstance(entry, str) and entry and entry == entry.strip() for entry in value
     ):
-        raise RecoveryGateError(f"invalid {key} for {item.get('project_id')}")
+        raise RecoveryGateError(f"invalid {key} for {project_id}")
     if len(set(value)) != len(value):
-        raise RecoveryGateError(f"duplicate {key} for {item.get('project_id')}")
-    return list(value)
+        raise RecoveryGateError(f"duplicate {key} for {project_id}")
+    return [_verify_evidence_reference(root, str(project_id), key, entry) for entry in value]
 
 
 def load_recovery_contracts(root: Path) -> dict[str, dict]:
@@ -76,10 +140,10 @@ def load_recovery_contracts(root: Path) -> dict[str, dict]:
         mode = item.get("recovery_mode")
         if mode not in ALLOWED_MODES:
             raise RecoveryGateError(f"invalid recovery mode: {project_id}")
-        checkpoint = _evidence_list(item, "checkpoint_evidence")
-        rollback = _evidence_list(item, "rollback_evidence")
-        restore = _evidence_list(item, "restore_test_evidence")
-        fault = _evidence_list(item, "fault_injection_evidence")
+        checkpoint = _evidence_list(root, item, "checkpoint_evidence")
+        rollback = _evidence_list(root, item, "rollback_evidence")
+        restore = _evidence_list(root, item, "restore_test_evidence")
+        fault = _evidence_list(root, item, "fault_injection_evidence")
         ready = item.get("production_ready")
         if not isinstance(ready, bool):
             raise RecoveryGateError(f"invalid production_ready: {project_id}")
@@ -93,6 +157,10 @@ def load_recovery_contracts(root: Path) -> dict[str, dict]:
                     f"production-ready recovery contract lacks evidence: {project_id}"
                 )
         normalized = dict(item)
+        normalized["checkpoint_evidence"] = checkpoint
+        normalized["rollback_evidence"] = rollback
+        normalized["restore_test_evidence"] = restore
+        normalized["fault_injection_evidence"] = fault
         result[project_id] = normalized
 
     expected = _repair_capable_projects(projects)
