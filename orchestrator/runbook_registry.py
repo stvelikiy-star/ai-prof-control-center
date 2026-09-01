@@ -1,8 +1,9 @@
 """Strict repair-runbook registry.
 
 A GREEN runbook is invalid unless fault-injection and rollback evidence are
-explicitly recorded. Merely editing JSON can never silently promote an
-untested action to autonomous production authority.
+explicitly recorded. Eligibility additionally requires the independent repair
+policy for the same project/probe to be GREEN. No single JSON document can
+silently grant autonomous repair authority by itself.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from monitoring_profiles import load_monitoring_profiles
 from project_registry import load_projects
+from repair_policy import classify
 
 RUNBOOK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,79}$")
 ALLOWED_STATUS = {"draft", "verified", "retired"}
@@ -96,6 +98,8 @@ def load_runbooks(root: Path) -> dict[str, dict]:
 
 
 def eligible_green_runbooks(root: Path, project_id: str, probe_id: str) -> list[dict]:
+    if classify(root, project_id, probe_id) != "GREEN":
+        return []
     return [
         item for item in load_runbooks(root).values()
         if item["project_id"] == project_id
