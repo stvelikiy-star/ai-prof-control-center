@@ -2,13 +2,15 @@
 """Read-only multi-project monitoring for AI PROF Repair Team.
 
 The engine intentionally supports only fixed probe kinds. Project profile text
-can select parameters, but can never provide arbitrary shell commands.
-Failures are observations; mutations are delegated to the incident/repair
-pipeline and are never performed by this module.
+can select bounded parameters, but can never provide arbitrary shell commands,
+arbitrary filesystem probes, credentials in URLs, or redirect-based network
+pivots. Failures are observations; mutations are delegated to the incident and
+repair pipeline and are never performed by this module.
 """
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import socket
@@ -16,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -37,6 +40,10 @@ ALLOWED_PROBE_KINDS = {
     "tcp_connect",
     "git_clean",
 }
+CONTROL_CENTER_PROJECT_ID = "ai-prof-control-center"
+CONTROL_CENTER_RUNTIME = Path("/home/agent/projects/ai-prof-control-center")
+CONTROL_CENTER_STATE = Path("/home/agent/.local/state/ai-prof-control-center")
+BLOCKED_NETWORK_HOSTS = {"metadata.google.internal"}
 
 
 class MonitoringConfigError(ValueError):
@@ -101,6 +108,77 @@ def _monitoring_config(project: dict) -> dict:
     return {"enabled": enabled, "probes": probes}
 
 
+def _path_within(candidate: Path, root: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _allowed_path_roots(project: dict) -> tuple[Path, ...]:
+    registered = Path(_require_str(project, "path")).resolve(strict=False)
+    roots = [registered]
+    if project.get("project_id") == CONTROL_CENTER_PROJECT_ID:
+        roots.extend(
+            [
+                CONTROL_CENTER_RUNTIME.resolve(strict=False),
+                CONTROL_CENTER_STATE.resolve(strict=False),
+            ]
+        )
+    unique: list[Path] = []
+    for root in roots:
+        if root not in unique:
+            unique.append(root)
+    return tuple(unique)
+
+
+def _validate_monitored_path(project: dict, probe_id: str, raw_path: str) -> str:
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise MonitoringConfigError(f"{probe_id} path must be absolute")
+    resolved = path.resolve(strict=False)
+    roots = _allowed_path_roots(project)
+    if not any(resolved == root or _path_within(resolved, root) for root in roots):
+        raise MonitoringConfigError(f"{probe_id} path is outside approved project/state roots")
+    return str(resolved)
+
+
+def _validate_network_host(probe_id: str, host: str) -> str:
+    normalized = host.strip().lower().rstrip(".")
+    if not normalized or normalized in BLOCKED_NETWORK_HOSTS:
+        raise MonitoringConfigError(f"blocked network host for {probe_id}")
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return host
+    if address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved:
+        raise MonitoringConfigError(f"blocked network address for {probe_id}")
+    return host
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _validate_http_url(probe_id: str, url: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise MonitoringConfigError(f"invalid URL for {probe_id}: {exc}") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise MonitoringConfigError(f"{probe_id} URL must be http(s)")
+    if parsed.username is not None or parsed.password is not None:
+        raise MonitoringConfigError(f"{probe_id} URL credentials are forbidden")
+    if parsed.fragment:
+        raise MonitoringConfigError(f"{probe_id} URL fragments are forbidden")
+    _validate_network_host(probe_id, parsed.hostname)
+    if parsed.scheme == "http" and parsed.hostname.lower() not in {"localhost", "127.0.0.1", "::1"}:
+        raise MonitoringConfigError(f"{probe_id} non-local HTTP is forbidden; use HTTPS")
+    return url
+
+
 def validate_probe(project: dict, probe: dict) -> dict:
     if not isinstance(probe, dict):
         raise MonitoringConfigError("probe must be an object")
@@ -122,30 +200,25 @@ def validate_probe(project: dict, probe: dict) -> dict:
     normalized["timeout_seconds"] = float(timeout)
 
     if kind in {"path_exists", "heartbeat_json"}:
-        path = _require_str(probe, "path")
-        if not Path(path).is_absolute():
-            raise MonitoringConfigError(f"{probe_id} path must be absolute")
-        normalized["path"] = path
+        normalized["path"] = _validate_monitored_path(
+            project, probe_id, _require_str(probe, "path")
+        )
     elif kind == "http_get":
-        url = _require_str(probe, "url")
-        if not (url.startswith("http://") or url.startswith("https://")):
-            raise MonitoringConfigError(f"{probe_id} URL must be http(s)")
-        normalized["url"] = url
+        normalized["url"] = _validate_http_url(probe_id, _require_str(probe, "url"))
         expected = probe.get("expected_status", 200)
         if isinstance(expected, bool) or not isinstance(expected, int) or not (100 <= expected <= 599):
             raise MonitoringConfigError(f"invalid expected_status for {probe_id}")
         normalized["expected_status"] = expected
     elif kind == "tcp_connect":
-        host = _require_str(probe, "host")
+        normalized["host"] = _validate_network_host(probe_id, _require_str(probe, "host"))
         port = probe.get("port")
         if isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535):
             raise MonitoringConfigError(f"invalid port for {probe_id}")
-        normalized["host"] = host
         normalized["port"] = port
     elif kind == "git_clean":
-        project_path = Path(_require_str(project, "path"))
-        requested = Path(str(probe.get("path", project_path)))
-        if not requested.is_absolute() or requested != project_path:
+        project_path = Path(_require_str(project, "path")).resolve(strict=False)
+        requested = Path(str(probe.get("path", project_path))).resolve(strict=False)
+        if requested != project_path:
             raise MonitoringConfigError(f"{probe_id} git path must equal registered project path")
         normalized["path"] = str(requested)
 
@@ -208,8 +281,9 @@ def _http_get(probe: dict) -> tuple[bool, str]:
         method="GET",
         headers={"User-Agent": "AI-PROF-Monitor/1"},
     )
+    opener = urllib.request.build_opener(_NoRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=probe["timeout_seconds"]) as response:
+        with opener.open(request, timeout=probe["timeout_seconds"]) as response:
             body = response.read(MAX_HTTP_BODY_BYTES)
             status = int(response.status)
     except urllib.error.HTTPError as exc:
@@ -292,6 +366,7 @@ def monitor_projects(root: Path, only_project: str | None = None) -> list[Observ
         if not project_enabled(project):
             continue
         effective = dict(project)
+        effective["project_id"] = project_id
         if project_id in profiles:
             effective["monitoring"] = profiles[project_id]
         for probe in validate_project_monitoring(effective):
