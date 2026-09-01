@@ -134,13 +134,14 @@ class ProjectRecoveryGateTests(unittest.TestCase):
         )
         self.assertTrue(all(item["production_ready"] is False for item in loaded.values()))
 
-    def test_control_center_has_unit_recovery_code_but_not_staging_verification(self):
+    def test_control_center_shadow_fault_evidence_still_does_not_grant_staging_authority(self):
         ready, blockers = recovery.recovery_readiness(ROOT, "ai-prof-control-center")
         self.assertFalse(ready)
         self.assertNotIn("CHECKPOINT_EVIDENCE_MISSING", blockers)
         self.assertNotIn("ROLLBACK_EVIDENCE_MISSING", blockers)
         self.assertNotIn("RESTORE_TEST_EVIDENCE_MISSING", blockers)
-        self.assertIn("FAULT_INJECTION_EVIDENCE_MISSING", blockers)
+        self.assertNotIn("FAULT_INJECTION_EVIDENCE_MISSING", blockers)
+        self.assertIn("RECOVERY_MODE_NOT_VERIFIED", blockers)
         self.assertIn("RECOVERY_VERIFICATION_LEVEL_INSUFFICIENT", blockers)
         self.assertIn("PRODUCTION_RECOVERY_NOT_APPROVED", blockers)
 
