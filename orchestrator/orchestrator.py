@@ -186,7 +186,9 @@ def validate_access(data: dict[str, str]) -> None:
         raise RuntimeError("BLOCKED_MISSING_ENVIRONMENT: " + ", ".join(missing_env))
 
 
-def validate_incident_repair_contract(root: Path, data: dict[str, str]) -> None:
+def validate_incident_repair_contract(
+    root: Path, state_root: Path, data: dict[str, str]
+) -> None:
     origin = data.get("Repair-Origin", "")
     present_reserved = [
         field for field in INCIDENT_REPAIR_METADATA_FIELDS
@@ -214,29 +216,55 @@ def validate_incident_repair_contract(root: Path, data: dict[str, str]) -> None:
     except (ValueError, TestContractError, KeyError) as exc:
         raise RuntimeError(f"BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: {exc}") from exc
     expected_checks = ", ".join(contract["required_checks"])
-    mismatches = []
+    contract_mismatches = []
     if data["Test-Contract-ID"] != contract["contract_id"]:
-        mismatches.append("id")
+        contract_mismatches.append("id")
     if data["Test-Contract-SHA256"] != contract["sha256"]:
-        mismatches.append("sha256")
+        contract_mismatches.append("sha256")
     if data["Test-Contract-Outcome"] != contract["required_outcome"]:
-        mismatches.append("outcome")
+        contract_mismatches.append("outcome")
     if data["Required-Checks"] != expected_checks:
-        mismatches.append("required_checks")
-    if mismatches:
-        raise RuntimeError("BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: " + ", ".join(mismatches))
+        contract_mismatches.append("required_checks")
+    if contract_mismatches:
+        raise RuntimeError(
+            "BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: " + ", ".join(contract_mismatches)
+        )
 
     try:
-        from repair_task_bridge import _automatic_repair_scope_allowed
-        from submit_task import IntakeError, validate_scope
-        scope_files = split_csv(data["Scope-Files"])
-        if not scope_files or any(not _automatic_repair_scope_allowed(item) for item in scope_files):
-            raise RuntimeError("BLOCKED_REPAIR_SCOPE_INTEGRITY")
-        validate_scope(Path(project["path"]), scope_files, project["allowed_scope"])
-    except RuntimeError:
-        raise
-    except (ValueError, IntakeError) as exc:
-        raise RuntimeError(f"BLOCKED_REPAIR_SCOPE_INTEGRITY: {exc}") from exc
+        import repair_task_bridge as bridge
+        result_path = state_root / "diagnosis" / "results" / f"{data['Incident-ID']}.json"
+        payload, diagnosis_sha256 = bridge._read_json(result_path)
+        diagnosis, response_class, runbooks = bridge._validate_result(
+            root, state_root, payload
+        )
+        expected_scope = bridge._scope_from_evidence(project, diagnosis)
+        expected_task_id = bridge._task_id(project_id, data["Incident-ID"])
+        expected_work_branch = bridge._work_branch(data["Incident-ID"])
+    except Exception as exc:
+        raise RuntimeError(f"BLOCKED_REPAIR_EVIDENCE_DRIFT: {exc}") from exc
+
+    expected_runbook_ids = ",".join(sorted(runbooks)) if runbooks else "none"
+    evidence_mismatches = []
+    if payload.get("project_id") != project_id:
+        evidence_mismatches.append("project_id")
+    if diagnosis.get("incident_id") != data["Incident-ID"]:
+        evidence_mismatches.append("incident_id")
+    if data["Diagnosis-SHA256"] != diagnosis_sha256:
+        evidence_mismatches.append("diagnosis_sha256")
+    if data["Repair-Response-Class"] != response_class:
+        evidence_mismatches.append("response_class")
+    if data["Repair-Runbook-IDs"] != expected_runbook_ids:
+        evidence_mismatches.append("runbooks")
+    if data["Task-ID"] != expected_task_id:
+        evidence_mismatches.append("task_id")
+    if data["Work-Branch"] != expected_work_branch:
+        evidence_mismatches.append("work_branch")
+    if split_csv(data["Scope-Files"]) != expected_scope:
+        evidence_mismatches.append("scope")
+    if evidence_mismatches:
+        raise RuntimeError(
+            "BLOCKED_REPAIR_EVIDENCE_DRIFT: " + ", ".join(evidence_mismatches)
+        )
 
 
 def acquire_lock(lock_path: Path):
@@ -294,7 +322,8 @@ def process_one(paths: Paths) -> int:
             validate_task_base_branch(paths.root, data["Project-Path"], data["Base-Branch"])
         except ValueError as exc:
             raise RuntimeError(f"BLOCKED_INVALID_BASE_BRANCH: {exc}") from exc
-        validate_incident_repair_contract(paths.root, data)
+        state_root = paths.pending.parent.parent
+        validate_incident_repair_contract(paths.root, state_root, data)
         validate_access(data)
         context = load_context(paths.root, data["Agent-Context"])
         summary = "\n".join([
