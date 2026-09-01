@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "projects": {
+    "ai-prof-control-center": {
+      "enabled": true,
+      "probes": [
+        {
+          "id": "runtime-checkout",
+          "kind": "path_exists",
+          "path": "/home/agent/projects/ai-prof-control-center",
+          "severity": "critical"
+        },
+        {
+          "id": "maintenance-checkout",
+          "kind": "path_exists",
+          "path": "/home/agent/projects/ai-prof-control-center-maintenance",
+          "severity": "warning"
+        },
+        {
+          "id": "supervisor-heartbeat",
+          "kind": "heartbeat_json",
+          "path": "/home/agent/.local/state/ai-prof-control-center/run/heartbeat.json",
+          "max_age_seconds": 90,
+          "severity": "critical"
+        }
+      ]
+    },
+    "ak-bermet": {
+      "enabled": true,
+      "probes": [
+        {
+          "id": "runtime-checkout",
+          "kind": "path_exists",
+          "path": "/home/agent/projects/ak-bermet",
+          "severity": "critical"
+        }
+      ]
+    },
+    "kol-travel-platform": {
+      "enabled": true,
+      "probes": [
+        {
+          "id": "runtime-checkout",
+          "kind": "path_exists",
+          "path": "/home/agent/Загрузки/kol-travel-platform",
+          "severity": "critical"
+        }
+      ]
+    },
+    "resort-os": {
+      "enabled": true,
+      "probes": [
+        {
+          "id": "runtime-checkout",
+          "kind": "path_exists",
+          "path": "/home/agent/projects/resort-os",
+          "severity": "critical"
+        }
+      ]
+    }
+  }
+}

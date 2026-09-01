@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "runbooks": [
+    {
+      "runbook_id": "AI_PROF_SUPERVISOR_HEARTBEAT_V1",
+      "project_id": "ai-prof-control-center",
+      "probe_id": "supervisor-heartbeat",
+      "status": "draft",
+      "response_class": "YELLOW",
+      "allowed_action": "restart_service",
+      "target": "ai-prof-control-center.service",
+      "required_tests": [
+        "supervisor heartbeat becomes fresh",
+        "queue state remains readable",
+        "control center status is healthy"
+      ],
+      "rollback": "stop attempted activation and restore previous verified service/runtime state",
+      "fault_injection_evidence": [],
+      "rollback_verified": false
+    }
+  ]
+}

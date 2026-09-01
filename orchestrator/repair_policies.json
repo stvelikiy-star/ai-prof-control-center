@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "projects": {
+    "ai-prof-control-center": {
+      "runtime-checkout": "RED",
+      "maintenance-checkout": "YELLOW",
+      "supervisor-heartbeat": "YELLOW"
+    },
+    "ak-bermet": {
+      "runtime-checkout": "RED"
+    },
+    "kol-travel-platform": {
+      "runtime-checkout": "RED"
+    },
+    "resort-os": {
+      "runtime-checkout": "RED"
+    }
+  }
+}
