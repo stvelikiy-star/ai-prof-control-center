@@ -15,8 +15,17 @@ import diagnosis_packet
 import incident_diagnosis_runner as diagnosis_runner
 import incident_engine
 import monitoring_engine as monitor
-import orchestrator as orch
 import repair_task_bridge as bridge
+
+
+def parse_task_values(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        values[key] = value
+    return values
 
 
 class RepairTaskBridgeTests(unittest.TestCase):
@@ -176,15 +185,15 @@ class RepairTaskBridgeTests(unittest.TestCase):
         task = Path(result.path)
         self.assertTrue(task.is_file())
         text = task.read_text(encoding="utf-8")
-        values, parsed_text = orch.parse_task(task)
+        values = parse_task_values(text)
         self.assertEqual(values["Execution-Mode"], "code")
         self.assertEqual(values["Project-Path"], str(self.project))
         self.assertTrue(values["Work-Branch"].startswith("fix/repair-inc-demo-"))
-        self.assertIn("Scope-Files: src/app.py", parsed_text)
-        self.assertIn("Owner-Approval-Required: yes", parsed_text)
-        self.assertIn("Incident-ID: INC-DEMO-", parsed_text)
-        self.assertIn("Diagnosis-SHA256:", parsed_text)
-        self.assertIn("Repair-Response-Class: YELLOW", parsed_text)
+        self.assertEqual(values["Scope-Files"], "src/app.py")
+        self.assertEqual(values["Owner-Approval-Required"], "yes")
+        self.assertTrue(values["Incident-ID"].startswith("INC-DEMO-"))
+        self.assertRegex(values["Diagnosis-SHA256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(values["Repair-Response-Class"], "YELLOW")
         self.assertIn("deployment", values["Out-of-Scope"])
 
     def test_bridge_is_exactly_once_across_existing_queue_task(self):
