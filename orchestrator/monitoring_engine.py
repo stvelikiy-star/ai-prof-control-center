@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from monitoring_profiles import MonitoringProfileError, load_monitoring_profiles
 from project_registry import ProjectPolicyError, load_projects, project_enabled
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -173,7 +174,8 @@ def validate_project_monitoring(project: dict) -> list[dict]:
 
 def _path_exists(probe: dict) -> tuple[bool, str]:
     path = Path(probe["path"])
-    return path.exists(), f"path={path} exists={path.exists()}"
+    exists = path.exists()
+    return exists, f"path={path} exists={exists}"
 
 
 def _heartbeat_json(probe: dict) -> tuple[bool, str]:
@@ -259,7 +261,7 @@ def run_probe(project_id: str, probe: dict) -> Observation:
     started = time.monotonic()
     try:
         ok, detail = PROBE_RUNNERS[probe["kind"]](probe)
-    except Exception as exc:  # fail closed; one broken probe must not kill the monitor loop
+    except Exception as exc:
         ok, detail = False, f"probe_exception={type(exc).__name__}:{_bounded_text(exc)}"
     latency_ms = max(0, int((time.monotonic() - started) * 1000))
     return Observation(
@@ -277,6 +279,10 @@ def run_probe(project_id: str, probe: dict) -> Observation:
 
 def monitor_projects(root: Path, only_project: str | None = None) -> list[Observation]:
     projects = load_projects(root)
+    try:
+        profiles = load_monitoring_profiles(root, set(projects))
+    except MonitoringProfileError as exc:
+        raise MonitoringConfigError(str(exc)) from exc
     if only_project is not None and only_project not in projects:
         raise MonitoringConfigError(f"unknown project: {only_project}")
     observations: list[Observation] = []
@@ -285,7 +291,10 @@ def monitor_projects(root: Path, only_project: str | None = None) -> list[Observ
             continue
         if not project_enabled(project):
             continue
-        for probe in validate_project_monitoring(project):
+        effective = dict(project)
+        if project_id in profiles:
+            effective["monitoring"] = profiles[project_id]
+        for probe in validate_project_monitoring(effective):
             observations.append(run_probe(project_id, probe))
     return observations
 
