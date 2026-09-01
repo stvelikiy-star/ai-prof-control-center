@@ -53,10 +53,11 @@ class TelegramBridgeV2Tests(unittest.TestCase):
         self.assertIn("/ai logs <TASK_ID>", v2.V2_HELP)
         self.assertIn("/ai blockers <project>", v2.V2_HELP)
         self.assertIn("/ai git <project> status", v2.V2_HELP)
-        self.assertIn("no force-push", v2.V2_HELP.lower())
-        self.assertIn("no migration", v2.V2_HELP.lower())
-        self.assertIn("no restart", v2.V2_HELP.lower())
-        self.assertIn("no deploy", v2.V2_HELP.lower())
+        normalized_help = " ".join(v2.V2_HELP.lower().split())
+        self.assertIn("no force-push", normalized_help)
+        self.assertIn("no migration", normalized_help)
+        self.assertIn("no restart", normalized_help)
+        self.assertIn("no deploy", normalized_help)
 
     def test_unauthorized_update_is_silent(self):
         client = FakeClient()
