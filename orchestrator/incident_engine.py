@@ -3,7 +3,8 @@
 
 One failing observation fingerprint maps to one open incident. Repeated failures
 update evidence instead of creating alert storms. A recovery observation moves
-the incident to resolved. This module does not repair or deploy anything.
+the incident to immutable episode history. This module does not repair or
+deploy anything.
 """
 from __future__ import annotations
 
@@ -52,12 +53,12 @@ def utc_now() -> str:
 
 
 def _safe_key(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-    return digest
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def incident_id_for(observation: Observation) -> str:
-    digest = hashlib.sha256(observation.fingerprint.encode("utf-8")).hexdigest()[:10].upper()
+    episode_key = f"{observation.fingerprint}|{observation.checked_at}"
+    digest = hashlib.sha256(episode_key.encode("utf-8")).hexdigest()[:10].upper()
     project = "".join(ch for ch in observation.project_id.upper() if ch.isalnum())[:16] or "PROJECT"
     return f"INC-{project}-{digest}"
 
@@ -104,12 +105,12 @@ def _load(path: Path) -> Incident | None:
     return Incident(**raw)
 
 
-def _incident_paths(state_root: Path, fingerprint: str) -> tuple[Path, Path]:
-    name = _safe_key(fingerprint) + ".json"
-    return (
-        state_root / "incidents" / "open" / name,
-        state_root / "incidents" / "resolved" / name,
-    )
+def _open_path(state_root: Path, fingerprint: str) -> Path:
+    return state_root / "incidents" / "open" / f"{_safe_key(fingerprint)}.json"
+
+
+def _resolved_path(state_root: Path, incident_id: str) -> Path:
+    return state_root / "incidents" / "resolved" / f"{incident_id}.json"
 
 
 def _save(path: Path, incident: Incident) -> None:
@@ -117,7 +118,7 @@ def _save(path: Path, incident: Incident) -> None:
 
 
 def apply_observation(state_root: Path, observation: Observation) -> tuple[str, Incident | None]:
-    open_path, resolved_path = _incident_paths(state_root, observation.fingerprint)
+    open_path = _open_path(state_root, observation.fingerprint)
     current = _load(open_path)
     now = utc_now()
 
@@ -130,6 +131,9 @@ def apply_observation(state_root: Path, observation: Observation) -> tuple[str, 
         current.last_detail = observation.detail
         current.last_latency_ms = observation.latency_ms
         current.last_observation_at = observation.checked_at
+        resolved_path = _resolved_path(state_root, current.incident_id)
+        if resolved_path.exists():
+            raise RuntimeError(f"resolved incident already exists: {current.incident_id}")
         _save(resolved_path, current)
         open_path.unlink(missing_ok=True)
         return "resolved", current
