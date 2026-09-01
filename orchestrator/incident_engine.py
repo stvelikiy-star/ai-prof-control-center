@@ -56,8 +56,8 @@ def _safe_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
-def incident_id_for(observation: Observation) -> str:
-    episode_key = f"{observation.fingerprint}|{observation.checked_at}"
+def incident_id_for(observation: Observation, opened_at: str) -> str:
+    episode_key = f"{observation.fingerprint}|{opened_at}"
     digest = hashlib.sha256(episode_key.encode("utf-8")).hexdigest()[:10].upper()
     project = "".join(ch for ch in observation.project_id.upper() if ch.isalnum())[:16] or "PROJECT"
     return f"INC-{project}-{digest}"
@@ -117,6 +117,15 @@ def _save(path: Path, incident: Incident) -> None:
     _atomic_write(path, json.dumps(asdict(incident), ensure_ascii=False, sort_keys=True, indent=2) + "\n")
 
 
+def _same_incident(left: Incident, right: Incident) -> bool:
+    return (
+        left.incident_id == right.incident_id
+        and left.fingerprint == right.fingerprint
+        and left.project_id == right.project_id
+        and left.probe_id == right.probe_id
+    )
+
+
 def apply_observation(state_root: Path, observation: Observation) -> tuple[str, Incident | None]:
     open_path = _open_path(state_root, observation.fingerprint)
     current = _load(open_path)
@@ -132,22 +141,27 @@ def apply_observation(state_root: Path, observation: Observation) -> tuple[str, 
         current.last_latency_ms = observation.latency_ms
         current.last_observation_at = observation.checked_at
         resolved_path = _resolved_path(state_root, current.incident_id)
-        if resolved_path.exists():
-            raise RuntimeError(f"resolved incident already exists: {current.incident_id}")
+        existing = _load(resolved_path)
+        if existing is not None:
+            if not _same_incident(existing, current):
+                raise RuntimeError(f"resolved incident collision: {current.incident_id}")
+            open_path.unlink(missing_ok=True)
+            return "resolved", existing
         _save(resolved_path, current)
         open_path.unlink(missing_ok=True)
         return "resolved", current
 
     if current is None:
+        opened_at = now
         current = Incident(
             version=INCIDENT_VERSION,
-            incident_id=incident_id_for(observation),
+            incident_id=incident_id_for(observation, opened_at),
             fingerprint=observation.fingerprint,
             project_id=observation.project_id,
             probe_id=observation.probe_id,
             severity=observation.severity,
             status="open",
-            opened_at=now,
+            opened_at=opened_at,
             updated_at=now,
             resolved_at="",
             failure_count=1,
@@ -155,6 +169,9 @@ def apply_observation(state_root: Path, observation: Observation) -> tuple[str, 
             last_latency_ms=observation.latency_ms,
             last_observation_at=observation.checked_at,
         )
+        resolved_path = _resolved_path(state_root, current.incident_id)
+        if resolved_path.exists():
+            raise RuntimeError(f"new incident id collides with history: {current.incident_id}")
         _save(open_path, current)
         return "opened", current
 
@@ -180,11 +197,16 @@ def summary(state_root: Path) -> dict:
         incident = _load(path)
         if incident is not None:
             open_items.append(asdict(incident))
+    resolved_count = 0
+    if resolved_dir.is_dir():
+        for path in sorted(resolved_dir.glob("INC-*.json")):
+            if _load(path) is not None:
+                resolved_count += 1
     return {
         "version": INCIDENT_VERSION,
         "generated_at": utc_now(),
         "open_count": len(open_items),
-        "resolved_count": len(list(resolved_dir.glob("*.json"))) if resolved_dir.is_dir() else 0,
+        "resolved_count": resolved_count,
         "open_incidents": open_items,
     }
 
