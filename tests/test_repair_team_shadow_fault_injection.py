@@ -102,7 +102,7 @@ class RepairTeamShadowFaultInjectionTests(unittest.TestCase):
     def test_fake_codex_transport_cannot_be_mistaken_for_external_ai(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("invoke_fn=_fake_codex_invoker", source)
-        self.assertIn("external_ai_called\": False", source)
+        self.assertIn('"external_ai_called": False', source)
         self.assertNotIn("cr.invoke_codex(", source)
 
 
