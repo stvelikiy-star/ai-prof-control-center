@@ -77,8 +77,10 @@ def build_packet(root: Path, state_root: Path, incident: dict) -> dict:
         "project_id": project_id,
         "probe_id": probe_id,
         "response_class": response_class,
+        "diagnosis_required": True,
+        "repair_preparation_allowed": response_class in {"GREEN", "YELLOW"},
+        "autonomous_repair_allowed": response_class == "GREEN",
         "owner_action_required": response_class == "RED",
-        "diagnosis_required": response_class in {"GREEN", "YELLOW"},
         "project": _safe_project_view(projects[project_id]),
         "incident": {
             key: incident.get(key)
