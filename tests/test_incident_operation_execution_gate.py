@@ -94,7 +94,24 @@ class IncidentOperationExecutionGateTests(unittest.TestCase):
             Path("/control"),
             Path("/state"),
             {"Execution-Mode": "operations", "Operation-Profile": "manual-profile"},
+            binding_loader=lambda _root: {},
         )
+
+    def test_stripping_all_repair_metadata_from_bound_profile_still_blocks(self):
+        data = {
+            "Execution-Mode": "operations",
+            "Operation-Profile": "demo-restart",
+        }
+        with self.assertRaisesRegex(
+            gate.IncidentOperationGateError,
+            "bound privileged profile requires incident-operation provenance",
+        ):
+            gate.validate_incident_operation_authority(
+                Path("/control"),
+                Path("/state"),
+                data,
+                binding_loader=lambda _root: {"DEMO_RESTART_V1": self.binding},
+            )
 
     def test_reserved_metadata_without_origin_blocks(self):
         data = {"Execution-Mode": "operations", "Incident-ID": self.incident_id}
