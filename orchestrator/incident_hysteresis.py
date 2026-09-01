@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 HYSTERESIS_VERSION = 1
@@ -39,6 +40,16 @@ def _safe_key(fingerprint: str) -> str:
 
 def state_path(state_root: Path, fingerprint: str) -> Path:
     return state_root / "incidents" / "hysteresis" / f"{_safe_key(fingerprint)}.json"
+
+
+def _timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HysteresisStateError(f"invalid observation timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise HysteresisStateError("observation timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -95,11 +106,16 @@ def load(state_root: Path, fingerprint: str) -> HysteresisState:
         raise HysteresisStateError(f"invalid hysteresis counters: {path}")
     if failures and successes:
         raise HysteresisStateError(f"conflicting hysteresis counters: {path}")
+    if observed:
+        _timestamp(observed)
     return HysteresisState(**payload)
 
 
 def record(state_root: Path, fingerprint: str, ok: bool, checked_at: str) -> HysteresisState:
+    current_timestamp = _timestamp(checked_at)
     state = load(state_root, fingerprint)
+    if state.last_observation_at and current_timestamp <= _timestamp(state.last_observation_at):
+        raise HysteresisStateError("replayed or out-of-order observation rejected")
     if ok:
         state.consecutive_successes = min(
             SUCCESSES_TO_RESOLVE, state.consecutive_successes + 1
