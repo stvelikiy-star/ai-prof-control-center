@@ -2,8 +2,9 @@
 
 Presence of a binding is privileged authority. The registry starts empty.
 A binding is valid only when it references a registered project/probe, a
-verified GREEN runbook with a compatible action, and an existing immutable
-OperationProfile whose kind is explicitly compatible with that diagnosis.
+verified GREEN runbook with a compatible action, an existing immutable
+OperationProfile whose kind is explicitly compatible with that diagnosis, and
+a project-level recovery contract that is production-ready.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from monitoring_profiles import load_monitoring_profiles
 from operation_profiles import resolve_profile
+from project_recovery_gate import require_recovery_ready
 from project_registry import load_projects, project_enabled
 from runbook_registry import load_runbooks
 
@@ -119,6 +121,10 @@ def load_operation_bindings(root: Path) -> dict[str, dict]:
             isinstance(entry, str) and entry and entry == entry.strip() for entry in task_scope
         ):
             raise OperationBindingError(f"invalid fixed task scope: {binding_id}")
+        try:
+            require_recovery_ready(root, project_id)
+        except ValueError as exc:
+            raise OperationBindingError(str(exc)) from exc
         normalized = dict(item)
         result[binding_id] = normalized
     return result

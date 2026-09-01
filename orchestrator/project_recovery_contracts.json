@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "project_id": "ai-prof-control-center",
+      "recovery_mode": "staged_activation",
+      "verification_level": "unit",
+      "checkpoint_evidence": [
+        "scripts/activate_mobile_control_v1.py:def create_checkpoint"
+      ],
+      "rollback_evidence": [
+        "scripts/activate_mobile_control_v1.py:def rollback"
+      ],
+      "restore_test_evidence": [
+        "tests/test_mobile_control_activation.py:test_rollback_checkpoint_contains_git_bundle_and_units"
+      ],
+      "fault_injection_evidence": [],
+      "production_ready": false
+    },
+    {
+      "project_id": "ak-bermet",
+      "recovery_mode": "prepare_only",
+      "verification_level": "unit",
+      "checkpoint_evidence": [
+        "orchestrator/projects.json:ak-bermet-production-backup.sh"
+      ],
+      "rollback_evidence": [],
+      "restore_test_evidence": [
+        "orchestrator/ak_bermet_release_v6_prepare.py:validate_restore_smoke",
+        "tests/test_ak_bermet_release_v6_prepare.py:validate_restore_smoke"
+      ],
+      "fault_injection_evidence": [],
+      "production_ready": false
+    },
+    {
+      "project_id": "kol-travel-platform",
+      "recovery_mode": "unverified",
+      "verification_level": "none",
+      "checkpoint_evidence": [],
+      "rollback_evidence": [],
+      "restore_test_evidence": [],
+      "fault_injection_evidence": [],
+      "production_ready": false
+    },
+    {
+      "project_id": "resort-os",
+      "recovery_mode": "unverified",
+      "verification_level": "none",
+      "checkpoint_evidence": [],
+      "rollback_evidence": [],
+      "restore_test_evidence": [],
+      "fault_injection_evidence": [],
+      "production_ready": false
+    }
+  ]
+}
