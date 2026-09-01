@@ -12,7 +12,8 @@ class RepairMonitorSystemdTests(unittest.TestCase):
     def test_service_is_read_only_except_state(self):
         text = SERVICE.read_text(encoding="utf-8")
         self.assertIn("Type=oneshot", text)
-        self.assertIn("incident_engine.py", text)
+        self.assertIn("incident_engine_canary.py", text)
+        self.assertIn("diagnosis_packet.py", text)
         self.assertIn("SuccessExitStatus=0 1", text)
         self.assertIn("NoNewPrivileges=true", text)
         self.assertIn("ProtectSystem=strict", text)
