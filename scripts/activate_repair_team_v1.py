@@ -53,7 +53,6 @@ PHASE_UNITS = {
 }
 SUPPORTED_ENABLED_STATES = {"enabled", "disabled", "static", "indirect", "not-found"}
 FRESH_EVIDENCE_SECONDS = 300
-SAFE_EXIT_CODES = {0, 1}
 
 
 class ActivationError(RuntimeError):
@@ -265,7 +264,7 @@ def create_checkpoint(meta: dict[str, Any], approved_sha: str, phase: str) -> Pa
         target = UNIT_DIR / name
         existed = target.is_file() and not target.is_symlink()
         _write_private(backup / f"{name}.existed", "yes\n" if existed else "no\n")
-        if target.exists() and not existed:
+        if (target.exists() or target.is_symlink()) and not existed:
             raise ActivationError(f"pre-existing unit path is not a regular file: {target}")
         if existed:
             saved = backup / name
@@ -432,21 +431,18 @@ def activate(approved_sha: str, phase: str) -> tuple[Path, dict[str, Any]]:
     meta = verify_preconditions(approved_sha, phase)
     before_status = git("status", "--porcelain")
     backup = create_checkpoint(meta, approved_sha, phase)
-    changed = False
     try:
         install_phase_units(phase)
-        changed = True
         activate_phase_runtime(phase)
         evidence = verify_post_activation(approved_sha, phase, before_status)
     except Exception as exc:
-        if changed:
-            try:
-                rollback(backup)
-            except Exception as rollback_exc:
-                raise ActivationError(
-                    f"Repair Team activation failed: {exc}; automatic rollback ALSO failed: "
-                    f"{rollback_exc}; checkpoint={backup}"
-                ) from rollback_exc
+        try:
+            rollback(backup)
+        except Exception as rollback_exc:
+            raise ActivationError(
+                f"Repair Team activation failed: {exc}; automatic rollback ALSO failed: "
+                f"{rollback_exc}; checkpoint={backup}"
+            ) from rollback_exc
         if isinstance(exc, ActivationError):
             raise
         raise ActivationError(str(exc)) from exc
