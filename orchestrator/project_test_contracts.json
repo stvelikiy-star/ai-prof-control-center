@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "contracts": [
+    {
+      "contract_id": "AI_PROF_CONTROL_CENTER_CODE_V1",
+      "project_id": "ai-prof-control-center",
+      "kind": "code_repair",
+      "required_checks": [
+        "python3 -m unittest"
+      ],
+      "required_outcome": "STAGE_01C_AUDIT_PASS"
+    },
+    {
+      "contract_id": "AK_BERMET_CODE_V1",
+      "project_id": "ak-bermet",
+      "kind": "code_repair",
+      "required_checks": [
+        "npm run lint",
+        "npx tsc --noEmit --incremental false",
+        "npm run test:inspection",
+        "npm run build"
+      ],
+      "required_outcome": "STAGE_01C_AUDIT_PASS"
+    },
+    {
+      "contract_id": "KOL_TRAVEL_PLATFORM_CODE_V1",
+      "project_id": "kol-travel-platform",
+      "kind": "code_repair",
+      "required_checks": [
+        "npm run lint",
+        "npx tsc --noEmit --incremental false",
+        "npm run check:release-source",
+        "npm run build"
+      ],
+      "required_outcome": "STAGE_01C_AUDIT_PASS"
+    },
+    {
+      "contract_id": "RESORT_OS_CODE_V1",
+      "project_id": "resort-os",
+      "kind": "code_repair",
+      "required_checks": [
+        "npm test"
+      ],
+      "required_outcome": "STAGE_01C_AUDIT_PASS"
+    }
+  ]
+}
