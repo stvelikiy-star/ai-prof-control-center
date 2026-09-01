@@ -8,7 +8,7 @@ Type=oneshot
 User=agent
 Group=agent
 WorkingDirectory=/home/agent/projects/ai-prof-control-center
-ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/incident_engine.py
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/incident_engine_canary.py
 ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/diagnosis_packet.py
 Environment=HOME=/home/agent
 Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
