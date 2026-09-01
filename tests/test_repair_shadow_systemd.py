@@ -93,7 +93,7 @@ class RepairShadowSystemdTests(unittest.TestCase):
         )
         self.assertNotIn("incident_diagnosis_runner.py", monitor)
         self.assertNotIn("repair_task_bridge.py", monitor)
-        self.assertIn("incident_engine.py", monitor)
+        self.assertIn("incident_engine_canary.py", monitor)
         self.assertIn("diagnosis_packet.py", monitor)
 
 
