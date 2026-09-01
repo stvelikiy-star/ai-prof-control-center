@@ -44,17 +44,19 @@ class DiagnosisPacketTests(unittest.TestCase):
         )
         return root
 
+    def _failure(self, checked_at: str | None = None):
+        return monitor.Observation(
+            project_id="demo", probe_id="runtime", kind="path_exists",
+            severity="warning", ok=False, checked_at=checked_at or monitor.utc_now(),
+            latency_ms=1, detail="missing", fingerprint="demo:runtime",
+        )
+
     def test_packet_contains_only_safe_project_view(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             root = self._root(project)
             state = project / "state"
-            observation = monitor.Observation(
-                project_id="demo", probe_id="runtime", kind="path_exists",
-                severity="warning", ok=False, checked_at=monitor.utc_now(),
-                latency_ms=1, detail="missing", fingerprint="demo:runtime",
-            )
-            _, incident = incident_engine.apply_observation(state, observation)
+            incident_engine.apply_observation(state, self._failure())
             incident_engine.write_summary(state)
             paths = diagnosis_packet.generate_packets(root, state)
             self.assertEqual(len(paths), 1)
@@ -74,18 +76,36 @@ class DiagnosisPacketTests(unittest.TestCase):
                 encoding="utf-8",
             )
             state = project / "state"
-            observation = monitor.Observation(
-                project_id="demo", probe_id="runtime", kind="path_exists",
-                severity="critical", ok=False, checked_at=monitor.utc_now(),
-                latency_ms=1, detail="missing", fingerprint="demo:runtime",
-            )
-            incident_engine.apply_observation(state, observation)
+            incident_engine.apply_observation(state, self._failure())
             incident_engine.write_summary(state)
             path = diagnosis_packet.generate_packets(root, state)[0]
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["response_class"], "RED")
             self.assertTrue(payload["owner_action_required"])
             self.assertFalse(payload["diagnosis_required"])
+
+    def test_recovered_incident_leaves_no_stale_pending_packet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            root = self._root(project)
+            state = project / "state"
+            incident_engine.apply_observation(
+                state, self._failure("2026-09-01T00:00:00+00:00")
+            )
+            incident_engine.write_summary(state)
+            pending = diagnosis_packet.generate_packets(root, state)[0]
+            self.assertTrue(pending.exists())
+            recovery = monitor.Observation(
+                project_id="demo", probe_id="runtime", kind="path_exists",
+                severity="warning", ok=True, checked_at="2026-09-01T00:01:00+00:00",
+                latency_ms=1, detail="healthy", fingerprint="demo:runtime",
+            )
+            incident_engine.apply_observation(state, recovery)
+            incident_engine.write_summary(state)
+            self.assertEqual(diagnosis_packet.generate_packets(root, state), [])
+            self.assertFalse(pending.exists())
+            archived = state / "diagnosis" / "resolved" / pending.name
+            self.assertTrue(archived.exists())
 
 
 if __name__ == "__main__":
