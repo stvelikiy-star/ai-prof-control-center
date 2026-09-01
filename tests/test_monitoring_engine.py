@@ -27,6 +27,16 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
+class _RedirectHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", "/redirected")
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        return
+
+
 class MonitoringEngineTests(unittest.TestCase):
     def _root_with_project(self, project: dict) -> Path:
         self.tmp = tempfile.TemporaryDirectory()
@@ -68,6 +78,19 @@ class MonitoringEngineTests(unittest.TestCase):
                 self._project(project_path, [{"id": "missing", "kind": "path_exists", "path": str(missing)}])
             )
             self.assertFalse(monitor.monitor_projects(root)[0].ok)
+
+    def test_path_outside_registered_project_is_rejected(self):
+        with tempfile.TemporaryDirectory() as project_tmp, tempfile.TemporaryDirectory() as other_tmp:
+            project_path = Path(project_tmp)
+            root = self._root_with_project(
+                self._project(project_path, [{
+                    "id": "outside",
+                    "kind": "path_exists",
+                    "path": str(Path(other_tmp)),
+                }])
+            )
+            with self.assertRaises(monitor.MonitoringConfigError):
+                monitor.monitor_projects(root)
 
     def test_fresh_and_stale_heartbeat(self):
         with tempfile.TemporaryDirectory() as project_tmp:
@@ -112,6 +135,39 @@ class MonitoringEngineTests(unittest.TestCase):
                 }])
             )
             self.assertTrue(monitor.monitor_projects(root)[0].ok)
+
+    def test_http_redirect_is_not_followed(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        port = server.server_address[1]
+        with tempfile.TemporaryDirectory() as project_tmp:
+            project_path = Path(project_tmp)
+            root = self._root_with_project(
+                self._project(project_path, [{
+                    "id": "redirect",
+                    "kind": "http_get",
+                    "url": f"http://127.0.0.1:{port}/health",
+                    "expected_status": 200,
+                }])
+            )
+            observation = monitor.monitor_projects(root)[0]
+            self.assertFalse(observation.ok)
+            self.assertIn("http_status=302", observation.detail)
+
+    def test_url_credentials_are_rejected(self):
+        with self.assertRaises(monitor.MonitoringConfigError):
+            monitor._validate_http_url("bad", "https://user:password@example.com/health")
+
+    def test_non_local_plain_http_is_rejected(self):
+        with self.assertRaises(monitor.MonitoringConfigError):
+            monitor._validate_http_url("bad", "http://example.com/health")
+
+    def test_link_local_metadata_address_is_rejected(self):
+        with self.assertRaises(monitor.MonitoringConfigError):
+            monitor._validate_http_url("bad", "https://169.254.169.254/latest/meta-data")
 
     def test_tcp_probe(self):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
