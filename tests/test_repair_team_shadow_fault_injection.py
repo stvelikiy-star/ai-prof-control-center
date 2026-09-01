@@ -16,7 +16,7 @@ SPEC.loader.exec_module(fault)
 
 
 class RepairTeamShadowFaultInjectionTests(unittest.TestCase):
-    def test_shadow_fault_injection_exercises_current_pipeline(self):
+    def test_shadow_fault_injection_exercises_real_incident_lifecycle(self):
         report = fault.run_shadow(ROOT, git_status_fn=lambda: "stable-tree")
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["version"], 2)
