@@ -5,6 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 
+# Keep this evidence on a feature/** branch so the repository push CI runs it.
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "repair_team_red_fault_injection.py"
 SPEC = importlib.util.spec_from_file_location("repair_team_red_fault_injection", SCRIPT)
