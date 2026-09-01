@@ -79,10 +79,11 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
                     )
                 (unit_root / name).write_text(text, encoding="utf-8")
 
-            def source_for(name: str) -> Path:
-                return unit_root / name
-
-            with mock.patch.object(activation.base, "_unit_source", side_effect=source_for):
+            with mock.patch.object(
+                activation.base,
+                "_unit_source",
+                side_effect=lambda name: unit_root / name,
+            ):
                 with self.assertRaisesRegex(activation.ActivationError, "monitor unit runner contract mismatch"):
                     activation.validate_staged_units()
 
@@ -153,6 +154,16 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
                 with self.assertRaisesRegex(activation.ActivationError, "missing or unsafe"):
                     activation.verify_shadow_queue_health_evidence()
 
+    def test_invalid_shadow_health_counter_blocks_activation(self):
+        with tempfile.TemporaryDirectory(prefix="repair-activation-v2-counter-") as tmp:
+            state = Path(tmp)
+            payload = self._healthy_payload()
+            payload["diagnosis"]["pending_count"] = "1"
+            self._write_health(state, payload)
+            with mock.patch.object(activation.base, "STATE_ROOT", state):
+                with self.assertRaisesRegex(activation.ActivationError, "counter invalid"):
+                    activation.verify_shadow_queue_health_evidence()
+
     def test_diagnosis_post_activation_requires_monitor_bindings_and_shadow_health(self):
         approved = "a" * 40
         monitor_evidence = {"observations": 5, "open_incidents": 0, "resolved_incidents": 2}
@@ -175,23 +186,27 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
         ) as shadow, mock.patch.object(
             activation.base,
             "systemd_state",
-            side_effect=["active", "active"],
+            side_effect=["enabled", "active", "enabled", "active"],
         ):
             evidence = activation.verify_post_activation(approved, "diagnosis", "")
         monitor.assert_called_once_with()
         bindings.assert_called_once_with()
         shadow.assert_called_once_with()
-        self.assertEqual(evidence["monitor_timer"], "active")
-        self.assertEqual(evidence["diagnosis_timer"], "active")
+        self.assertEqual(evidence["monitor_timer"], {"enabled": "enabled", "active": "active"})
+        self.assertEqual(evidence["diagnosis_timer"], {"enabled": "enabled", "active": "active"})
         self.assertEqual(evidence["shadow_queue_health"], shadow_evidence)
 
-    def test_monitor_post_activation_does_not_require_shadow_health(self):
+    def test_monitor_post_activation_requires_ready_timer_without_shadow_health(self):
         approved = "b" * 40
         expected = {"observations": 3, "open_incidents": 1, "resolved_incidents": 0}
         with mock.patch.object(
             activation.base,
             "git",
             side_effect=[approved, "main", ""],
+        ), mock.patch.object(
+            activation.base,
+            "systemd_state",
+            side_effect=["enabled", "active"],
         ), mock.patch.object(
             activation.base,
             "verify_monitor_evidence",
@@ -203,7 +218,23 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
             evidence = activation.verify_post_activation(approved, "monitor", "")
         monitor.assert_called_once_with()
         shadow.assert_not_called()
-        self.assertEqual(evidence, expected)
+        self.assertEqual(evidence["monitor"], expected)
+        self.assertEqual(evidence["monitor_timer"], {"enabled": "enabled", "active": "active"})
+
+    def test_post_activation_blocks_if_timer_loses_ready_state(self):
+        approved = "e" * 40
+        with mock.patch.object(
+            activation.base,
+            "git",
+            side_effect=[approved, "main", ""],
+        ), mock.patch.object(
+            activation.base,
+            "systemd_state",
+            side_effect=["enabled", "inactive"],
+        ), mock.patch.object(activation.base, "verify_monitor_evidence") as monitor:
+            with self.assertRaisesRegex(activation.ActivationError, "timer not ready"):
+                activation.verify_post_activation(approved, "monitor", "")
+        monitor.assert_not_called()
 
     def test_v2_delegates_to_v1_activation_and_restores_overrides(self):
         original_validate = activation.base.validate_staged_units
@@ -236,16 +267,17 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
         self.assertIs(activation.base.verify_post_activation, original_post)
 
     def test_v2_contains_no_second_checkpoint_or_rollback_implementation(self):
-        source = inspect.getsource(activation)
+        self.assertFalse(hasattr(activation, "rollback"))
+        self.assertFalse(hasattr(activation, "create_checkpoint"))
+        source = inspect.getsource(activation.activate)
         self.assertIn("return base.activate(approved_sha, phase)", source)
         for forbidden in (
-            "def rollback(",
-            "def create_checkpoint(",
-            "systemctl enable",
+            "base.sudo(",
+            "systemctl",
             "git switch",
             "git merge",
-            "supabase db push",
-            "npm run deploy",
+            "supabase",
+            "deploy",
         ):
             self.assertNotIn(forbidden, source)
 
