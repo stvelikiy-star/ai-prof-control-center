@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI PROF Repair Team monitor every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Persistent=true
+Unit=ai-prof-repair-monitor.service
+
+[Install]
+WantedBy=timers.target
