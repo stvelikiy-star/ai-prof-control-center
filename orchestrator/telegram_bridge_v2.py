@@ -2,8 +2,11 @@
 """AI PROF Telegram Control Plane V2.
 
 Extends the existing secure Telegram bridge with owner-only mobile diagnostics.
-It deliberately does not expose arbitrary shell execution, secret values,
-force-push, destructive git operations, production migration, or deployment.
+Repair Team views are read-only: they expose incidents, recovery readiness and
+pipeline state but never execute repair, operations, deployment or restart.
+The bridge deliberately does not expose arbitrary shell execution, secret
+values, force-push, destructive git operations, production migration, or
+deployment.
 """
 from __future__ import annotations
 
@@ -15,14 +18,19 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import project_recovery_gate as recovery_gate
 import telegram_bridge as legacy
+from incident_engine import summary as incident_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_ROOT = legacy.STATE_DIR
 PROJECTS_PATH = legacy.PROJECTS_PATH
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,159}$")
+INCIDENT_ID_RE = re.compile(r"^INC-[A-Z0-9]{1,16}-[A-F0-9]{10}$")
 MAX_LINES = 70
 MAX_LOG_CHARS = 9000
+MAX_STATE_RECORD_BYTES = 256 * 1024
+SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 
 V2_HELP = """AI PROF Telegram Control Plane V2
 
@@ -31,6 +39,12 @@ Core:
 /ai status
 /ai health
 /ai queue [project]
+
+Repair Team (read-only):
+/ai incidents [project]       — open incidents
+/ai critical                  — critical open incidents
+/ai recovery [project]        — rollback/recovery readiness
+/ai repairs [project]         — repair pipeline state
 
 Tasks:
 /ai task <TASK_ID>            — task details and exact terminal reason
@@ -46,8 +60,9 @@ Release:
 /ai release <project> prepare
 
 Safety:
-No arbitrary shell, no secret values, no reset --hard, no clean -fd,
-no force-push, no migration and no deploy from Telegram.
+Repair Team status commands are read-only. No arbitrary shell, no secret values,
+no reset --hard, no clean -fd, no force-push, no migration, no restart and no
+deploy from Repair Team Telegram commands.
 """
 
 
@@ -285,8 +300,194 @@ def blockers_message(project_id: str) -> str:
     return legacy._telegram_truncate("\n".join(lines))
 
 
+def incidents_message(project_filter: str = "", severity_filter: str = "") -> str:
+    """Render bounded redacted open-incident state without changing it."""
+    try:
+        state = incident_summary(STATE_ROOT)
+    except Exception as exc:
+        return f"Repair incidents unavailable: {_sanitize(exc, 300)}"
+    rows = []
+    for item in state.get("open_incidents", []):
+        if not isinstance(item, dict):
+            continue
+        if project_filter and item.get("project_id") != project_filter:
+            continue
+        severity = str(item.get("severity") or "unknown").lower()
+        if severity_filter and severity != severity_filter:
+            continue
+        rows.append(item)
+    rows.sort(
+        key=lambda item: (
+            SEVERITY_ORDER.get(str(item.get("severity", "")).lower(), 9),
+            str(item.get("updated_at") or ""),
+            str(item.get("incident_id") or ""),
+        )
+    )
+    title = "AI PROF critical incidents" if severity_filter == "critical" else "AI PROF incidents"
+    lines = [title]
+    if project_filter:
+        lines.append(f"Project: {project_filter}")
+    lines.append(f"Open: {len(rows)}")
+    for item in rows[:15]:
+        incident_id = _sanitize(item.get("incident_id", "unknown"), 80)
+        project_id = _sanitize(item.get("project_id", "unknown"), 80)
+        probe_id = _sanitize(item.get("probe_id", "unknown"), 100)
+        severity = _sanitize(item.get("severity", "unknown"), 20)
+        failures = item.get("failure_count", 0)
+        detail = _sanitize(item.get("last_detail", "no detail"), 180)
+        lines.append(
+            f"- {incident_id} | {project_id} | {probe_id} | {severity} | failures={failures}"
+        )
+        lines.append(f"  {detail}")
+    if not rows:
+        lines.append("- none")
+    if len(rows) > 15:
+        lines.append(f"... +{len(rows) - 15} more")
+    return legacy._telegram_truncate("\n".join(lines))
+
+
+def critical_message() -> str:
+    return incidents_message(severity_filter="critical")
+
+
+def recovery_message(project_filter: str = "") -> str:
+    """Show authority-neutral recovery readiness without exposing evidence paths."""
+    try:
+        contracts = recovery_gate.load_recovery_contracts(ROOT)
+    except Exception as exc:
+        return f"Repair recovery state unavailable: {_sanitize(exc, 300)}"
+    project_ids = [project_filter] if project_filter else sorted(contracts)
+    lines = ["AI PROF recovery readiness"]
+    for project_id in project_ids:
+        item = contracts.get(project_id)
+        if item is None:
+            continue
+        try:
+            ready, blockers = recovery_gate.recovery_readiness(ROOT, project_id)
+        except Exception as exc:
+            lines.append(f"- {project_id} | unavailable | {_sanitize(exc, 180)}")
+            continue
+        mode = _sanitize(item.get("recovery_mode", "unknown"), 40)
+        level = _sanitize(item.get("verification_level", "unknown"), 40)
+        lines.append(
+            f"- {project_id} | mode={mode} | verification={level} | production={'READY' if ready else 'BLOCKED'}"
+        )
+        if blockers:
+            lines.append("  blockers: " + ", ".join(_sanitize(value, 80) for value in blockers))
+    if len(lines) == 1:
+        lines.append("- none")
+    return legacy._telegram_truncate("\n".join(lines))
+
+
+def _read_state_record(path: Path) -> dict | None:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_STATE_RECORD_BYTES:
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _incident_project_index() -> dict[str, str]:
+    result: dict[str, str] = {}
+    for bucket in ("open", "resolved"):
+        directory = STATE_ROOT / "incidents" / bucket
+        try:
+            paths = list(directory.glob("*.json"))
+        except OSError:
+            paths = []
+        for path in paths:
+            payload = _read_state_record(path)
+            if not payload:
+                continue
+            incident_id = payload.get("incident_id")
+            project_id = payload.get("project_id")
+            if isinstance(incident_id, str) and INCIDENT_ID_RE.fullmatch(incident_id) and isinstance(project_id, str):
+                result[incident_id] = project_id
+    return result
+
+
+def _state_bucket_count(relative: str, project_filter: str, incident_projects: dict[str, str]) -> int:
+    directory = STATE_ROOT / relative
+    try:
+        paths = list(directory.glob("*.json"))
+    except OSError:
+        return 0
+    if not project_filter:
+        return sum(1 for path in paths if path.is_file() and not path.is_symlink())
+    count = 0
+    for path in paths:
+        payload = _read_state_record(path)
+        if payload is None:
+            continue
+        project_id = payload.get("project_id")
+        incident_id = payload.get("incident_id")
+        if not isinstance(project_id, str) and isinstance(incident_id, str):
+            project_id = incident_projects.get(incident_id)
+        if project_id == project_filter:
+            count += 1
+    return count
+
+
+def repairs_message(project_filter: str = "") -> str:
+    """Render read-only Repair Team pipeline counters from existing state stores."""
+    incident_projects = _incident_project_index()
+    buckets = (
+        ("diagnosis.pending", "diagnosis/pending"),
+        ("diagnosis.results", "diagnosis/results"),
+        ("diagnosis.blocked", "diagnosis/blocked"),
+        ("code.tasks", "repair_bridge/tasks"),
+        ("code.blocked", "repair_bridge/blocked"),
+        ("operations.tasks", "operations_bridge/tasks"),
+        ("operations.blocked", "operations_bridge/blocked"),
+    )
+    lines = ["AI PROF Repair Team pipeline"]
+    if project_filter:
+        lines.append(f"Project: {project_filter}")
+    lines.append("Artifacts:")
+    for label, relative in buckets:
+        lines.append(f"- {label}={_state_bucket_count(relative, project_filter, incident_projects)}")
+
+    projects = _projects()
+    path_to_project = {str(cfg.get("path")): pid for pid, cfg in projects.items()}
+    queue_counts: dict[str, int] = {}
+    for _task_id, locations in legacy._queue_locations(STATE_ROOT).items():
+        if not locations:
+            continue
+        queue, _path, fields = locations[0]
+        project_id = path_to_project.get(fields.get("Project-Path", ""), "unknown")
+        if project_filter and project_id != project_filter:
+            continue
+        queue_counts[queue] = queue_counts.get(queue, 0) + 1
+    lines.append(
+        "Queues: " + (", ".join(f"{key}={value}" for key, value in sorted(queue_counts.items())) or "empty")
+    )
+    try:
+        open_incidents = incident_summary(STATE_ROOT).get("open_incidents", [])
+        open_count = sum(
+            1 for item in open_incidents
+            if isinstance(item, dict) and (not project_filter or item.get("project_id") == project_filter)
+        )
+    except Exception:
+        open_count = -1
+    lines.append(f"Open incidents: {open_count if open_count >= 0 else 'unavailable'}")
+    lines.append("Privileged execution authority: governed by current recovery + binding gates")
+    return legacy._telegram_truncate("\n".join(lines))
+
+
 def _send(client: legacy.TelegramClient, text: str) -> None:
     client.send(legacy._telegram_truncate(text))
+
+
+def _optional_project(remainder: str, command: str) -> str | None:
+    if remainder == command:
+        return ""
+    prefix = command + " "
+    if not remainder.startswith(prefix):
+        return None
+    project_id = remainder[len(prefix):].strip()
+    return project_id if project_id else None
 
 
 def extended_handle_update(update: object, config: legacy.Config, client: legacy.TelegramClient) -> None:
@@ -308,6 +509,18 @@ def extended_handle_update(update: object, config: legacy.Config, client: legacy
         return _send(client, V2_HELP)
     if remainder == "health":
         return _send(client, health_message())
+    if remainder == "critical":
+        return _send(client, critical_message())
+    for command, renderer in (
+        ("incidents", incidents_message),
+        ("recovery", recovery_message),
+        ("repairs", repairs_message),
+    ):
+        project_id = _optional_project(remainder, command)
+        if project_id is not None:
+            if project_id and project_id not in _projects():
+                return _send(client, f"Unknown project: {project_id}")
+            return _send(client, renderer(project_id))
     if remainder == "queue" or remainder.startswith("queue "):
         project_id = remainder[5:].strip() if remainder.startswith("queue ") else ""
         if project_id and project_id not in _projects():
