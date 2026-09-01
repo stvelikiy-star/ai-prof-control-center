@@ -51,7 +51,11 @@ class RepairTeamActivationV2Tests(unittest.TestCase):
         return path
 
     def test_current_repository_units_match_exact_v2_runner_contract(self):
-        with mock.patch.object(activation.base, "LIVE", ROOT):
+        with mock.patch.object(
+            activation.base,
+            "_unit_source",
+            side_effect=lambda name: ROOT / "systemd" / name,
+        ):
             activation.validate_staged_units()
         self.assertEqual(
             activation.MONITOR_RUNNERS,
