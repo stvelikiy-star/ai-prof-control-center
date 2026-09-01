@@ -33,6 +33,12 @@ def _block(reason: str) -> None:
     raise IncidentOperationGateError(f"BLOCKED_INCIDENT_OPERATION_AUTHORITY: {reason}")
 
 
+def _split_csv(value: str) -> list[str]:
+    if value.strip().lower() in {"none", "-"}:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def validate_incident_operation_authority(
     root: Path,
     state_root: Path,
@@ -113,7 +119,7 @@ def validate_incident_operation_authority(
     required_runbook = binding.get("required_runbook_id")
     if required_runbook not in eligible_runbooks:
         _block("binding runbook is no longer eligible")
-    if submit_task.split_csv(data["Repair-Runbook-IDs"]) != [required_runbook]:
+    if _split_csv(data["Repair-Runbook-IDs"]) != [required_runbook]:
         _block("task runbook metadata drift")
 
     try:
@@ -150,6 +156,6 @@ def validate_incident_operation_authority(
         expected_scope = fixed_scope_resolver(project, binding["task_scope"])
     except Exception as exc:
         _block(f"current fixed scope invalid: {exc}")
-    task_scope = submit_task.split_csv(data["Scope-Files"])
+    task_scope = _split_csv(data["Scope-Files"])
     if task_scope != expected_scope:
         _block("fixed scope drift")
