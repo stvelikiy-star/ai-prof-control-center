@@ -16,7 +16,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import incident_diagnosis_runner as diagnosis_runner
 import submit_task
@@ -32,6 +32,52 @@ RESULT_LIMIT = 128 * 1024
 INCIDENT_ID_RE = diagnosis_runner.INCIDENT_ID_RE
 REPAIR_ACTIONS = {"PREPARE_REPAIR_FOR_OWNER_REVIEW", "GREEN_RUNBOOK_CANDIDATE"}
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,79}$")
+
+# Incident-origin automatic repair must never be able to rewrite the evidence
+# that later proves the repair, or cross into authority/deployment/database
+# surfaces. These files may still be changed through an explicitly scoped owner
+# task, but they cannot be inferred from model-produced incident evidence.
+AUTOMATIC_REPAIR_DENY_PREFIXES = (
+    "tests/",
+    ".github/workflows/",
+    "systemd/",
+    "supabase/migrations/",
+    "automation/n8n/",
+)
+AUTOMATIC_REPAIR_DENY_EXACT = {
+    "test_control_center.py",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "pytest.ini",
+    "tox.ini",
+    "setup.cfg",
+    "Dockerfile",
+    "compose.yaml",
+    "compose.production.yaml",
+    "orchestrator/config.json",
+    "orchestrator/projects.json",
+    "orchestrator/project_test_contracts.json",
+    "orchestrator/project_test_contracts.py",
+    "orchestrator/project_recovery_contracts.json",
+    "orchestrator/project_recovery_gate.py",
+    "orchestrator/repair_operation_bindings.json",
+    "orchestrator/repair_operation_bindings.py",
+    "orchestrator/repair_policies.json",
+    "orchestrator/repair_policy.py",
+    "orchestrator/repair_runbooks.json",
+    "orchestrator/runbook_registry.py",
+    "orchestrator/operation_profiles.py",
+    "orchestrator/operations_runner.py",
+    "orchestrator/release_flow.py",
+    "orchestrator/submit_task.py",
+    "orchestrator/codex_runner.py",
+    "orchestrator/codex_stage01b_runner.py",
+    "orchestrator/control_loop.py",
+    "scripts/activate_repair_team_v1.py",
+}
 
 
 class RepairBridgeError(RuntimeError):
@@ -108,6 +154,22 @@ def _work_branch(incident_id: str) -> str:
     return f"fix/repair-{incident_id.lower()}"
 
 
+def _automatic_repair_scope_allowed(source: str) -> bool:
+    """Return whether model evidence may authorize an incident-origin code edit."""
+    path = PurePosixPath(source)
+    normalized = path.as_posix()
+    if normalized in AUTOMATIC_REPAIR_DENY_EXACT:
+        return False
+    if any(normalized.startswith(prefix) for prefix in AUTOMATIC_REPAIR_DENY_PREFIXES):
+        return False
+    name = path.name.lower()
+    if name.startswith("tsconfig") and name.endswith(".json"):
+        return False
+    if name.startswith("eslint") or name.startswith("jest") or name.startswith("vitest"):
+        return False
+    return True
+
+
 def _validate_result(root: Path, state_root: Path, payload: dict) -> tuple[dict, str, list[str]]:
     required = {
         "version",
@@ -173,6 +235,8 @@ def _scope_from_evidence(project: dict, diagnosis: dict) -> list[str]:
         source = raw.strip()
         if not source or "\\" in source or source.startswith("/"):
             continue
+        if not _automatic_repair_scope_allowed(source):
+            continue
         candidate = project_path / source
         try:
             candidate.lstat()
@@ -189,7 +253,7 @@ def _scope_from_evidence(project: dict, diagnosis: dict) -> list[str]:
         candidates.append(validated)
     scope = sorted(set(candidates))
     if not scope:
-        raise RepairBridgeError("diagnosis contains no existing allowlisted code evidence path")
+        raise RepairBridgeError("diagnosis contains no existing safe allowlisted code evidence path")
     if len(scope) > int(project.get("max_scope_files", submit_task.SCOPE_COUNT_LIMIT)):
         raise RepairBridgeError("diagnosis scope exceeds project max_scope_files")
     return submit_task.validate_scope(project_path, scope, project["allowed_scope"])
@@ -271,7 +335,8 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
             f"Repair incident {incident_id}. Validated root cause: {root_cause}. "
             "Make the minimum safe code change inside Scope-Files only. Preserve business rules, "
             "prices, legal rules, credentials, permissions, production data and unrelated behavior. "
-            "Run every Required-Check and leave production deployment out of scope.",
+            "Do not modify tests, test/toolchain configuration, migrations, deployment surfaces, "
+            "or Repair Team authority files. Run every Required-Check and leave production deployment out of scope.",
             submit_task.INSTRUCTION_LIMIT,
         )
         content = submit_task.render_task(
