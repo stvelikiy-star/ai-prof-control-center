@@ -9,10 +9,15 @@ from unittest import mock
 ORCHESTRATOR = Path(__file__).resolve().parents[1] / "orchestrator"
 sys.path.insert(0, str(ORCHESTRATOR))
 
-import incident_engine as base
 import incident_engine_canary as canary
-import incident_hysteresis as hysteresis
 import monitoring_engine as monitor
+
+# Bind tests to the exact module objects used by the canary. Under unittest
+# discovery the canary may resolve package imports (orchestrator.*), while
+# direct file execution may resolve top-level imports. Using these aliases
+# prevents duplicate module identities from weakening exception/mocking tests.
+base = canary.base
+hysteresis = canary.hysteresis
 
 
 class IncidentHysteresisCanaryTests(unittest.TestCase):
