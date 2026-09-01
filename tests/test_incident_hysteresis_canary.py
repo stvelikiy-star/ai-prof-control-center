@@ -41,6 +41,30 @@ class IncidentHysteresisCanaryTests(unittest.TestCase):
             state = hysteresis.load(root, "demo:heartbeat")
             self.assertEqual(state.consecutive_failures, 1)
 
+    def test_replayed_or_out_of_order_observation_cannot_advance_streak(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            canary.reconcile(
+                root,
+                [self.observation(False, "2026-09-01T00:01:00+00:00")],
+            )
+            for checked_at in (
+                "2026-09-01T00:01:00+00:00",
+                "2026-09-01T00:00:00+00:00",
+            ):
+                with self.subTest(checked_at=checked_at):
+                    with self.assertRaisesRegex(
+                        hysteresis.HysteresisStateError,
+                        "replayed or out-of-order",
+                    ):
+                        canary.reconcile(
+                            root,
+                            [self.observation(False, checked_at)],
+                        )
+            state = hysteresis.load(root, "demo:heartbeat")
+            self.assertEqual(state.consecutive_failures, 1)
+            self.assertEqual(base.summary(root)["open_count"], 0)
+
     def test_two_consecutive_failures_open_one_incident(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
