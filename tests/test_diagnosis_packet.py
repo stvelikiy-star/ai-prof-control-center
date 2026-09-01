@@ -63,11 +63,13 @@ class DiagnosisPacketTests(unittest.TestCase):
             payload = json.loads(paths[0].read_text(encoding="utf-8"))
             self.assertEqual(payload["response_class"], "YELLOW")
             self.assertTrue(payload["diagnosis_required"])
+            self.assertTrue(payload["repair_preparation_allowed"])
+            self.assertFalse(payload["autonomous_repair_allowed"])
             self.assertFalse(payload["owner_action_required"])
             self.assertNotIn("secret_file", payload["project"])
             self.assertIn("NO_PRODUCTION_MUTATION", payload["constraints"])
 
-    def test_red_policy_requires_owner(self):
+    def test_red_policy_requires_owner_but_keeps_read_only_diagnosis(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             root = self._root(project)
@@ -81,8 +83,10 @@ class DiagnosisPacketTests(unittest.TestCase):
             path = diagnosis_packet.generate_packets(root, state)[0]
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["response_class"], "RED")
+            self.assertTrue(payload["diagnosis_required"])
+            self.assertFalse(payload["repair_preparation_allowed"])
+            self.assertFalse(payload["autonomous_repair_allowed"])
             self.assertTrue(payload["owner_action_required"])
-            self.assertFalse(payload["diagnosis_required"])
 
     def test_recovered_incident_leaves_no_stale_pending_packet(self):
         with tempfile.TemporaryDirectory() as tmp:
