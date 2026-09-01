@@ -3,12 +3,14 @@
 This module records and validates recovery evidence only; it performs no backup,
 restore, rollback or deployment. A project is production recovery-ready only
 when the reviewed contract explicitly says so, every evidence reference resolves
-to a real source marker, and recovery has been verified at staging or production
-level. Unit/shadow evidence can improve confidence but never grants production
-authority by itself. Unknown, stale or partial recovery state fails closed.
+to a real source marker outside autonomous self-maintenance scope, and recovery
+has been verified at staging or production level. Unit/shadow evidence can
+improve confidence but never grants production authority by itself. Unknown,
+stale or partial recovery state fails closed.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 from pathlib import Path
 
@@ -48,6 +50,27 @@ def _path_has_symlink(root: Path, relative: Path) -> bool:
     return False
 
 
+def _scope_matches(source: str, pattern: str) -> bool:
+    if pattern.endswith("/**"):
+        prefix = pattern[:-3].rstrip("/")
+        return source == prefix or source.startswith(prefix + "/")
+    return fnmatch.fnmatchcase(source, pattern)
+
+
+def _self_maintenance_writable(root: Path, source: str) -> bool:
+    projects = load_projects(root)
+    control = projects.get("ai-prof-control-center")
+    if not control or not project_enabled(control):
+        return False
+    allowed = control.get("allowed_scope", [])
+    if not isinstance(allowed, list):
+        raise RecoveryGateError("invalid AI PROF self-maintenance allowed_scope")
+    return any(
+        isinstance(pattern, str) and pattern and _scope_matches(source, pattern)
+        for pattern in allowed
+    )
+
+
 def _verify_evidence_reference(root: Path, project_id: str, key: str, entry: str) -> str:
     source, separator, marker = entry.partition(":")
     if (
@@ -66,6 +89,10 @@ def _verify_evidence_reference(root: Path, project_id: str, key: str, entry: str
     relative = Path(source)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise RecoveryGateError(f"unsafe {key} evidence path for {project_id}")
+    if _self_maintenance_writable(root, source):
+        raise RecoveryGateError(
+            f"self-maintenance-writable {key} evidence rejected for {project_id}: {source}"
+        )
 
     root_resolved = root.resolve(strict=True)
     lexical = root_resolved / relative
