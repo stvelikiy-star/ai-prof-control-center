@@ -39,6 +39,16 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _current_bindings(root: Path, binding_loader: Callable) -> dict:
+    try:
+        bindings = binding_loader(root)
+    except Exception as exc:
+        _block(f"current privileged bindings are invalid: {exc}")
+    if not isinstance(bindings, dict):
+        _block("current privileged bindings have invalid shape")
+    return bindings
+
+
 def validate_incident_operation_authority(
     root: Path,
     state_root: Path,
@@ -57,6 +67,15 @@ def validate_incident_operation_authority(
     if not origin:
         if reserved_present:
             _block("reserved metadata without Repair-Origin")
+        if data.get("Execution-Mode") == "operations":
+            profile_key = data.get("Operation-Profile", "")
+            if profile_key and profile_key != "none":
+                bindings = _current_bindings(root, binding_loader)
+                if any(
+                    isinstance(item, dict) and item.get("operation_profile") == profile_key
+                    for item in bindings.values()
+                ):
+                    _block("bound privileged profile requires incident-operation provenance")
         return
     if origin != "incident-operation":
         _block("unexpected Repair-Origin")
@@ -99,10 +118,7 @@ def validate_incident_operation_authority(
     if payload.get("response_class") != "GREEN" or data["Repair-Response-Class"] != "GREEN":
         _block("response class is not current GREEN")
 
-    try:
-        bindings = binding_loader(root)
-    except Exception as exc:
-        _block(f"current privileged bindings are invalid: {exc}")
+    bindings = _current_bindings(root, binding_loader)
     binding = bindings.get(data["Repair-Operation-Binding"])
     if binding is None:
         _block("binding is no longer available")
