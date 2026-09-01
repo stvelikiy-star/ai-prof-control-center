@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ORCHESTRATOR = Path(__file__).resolve().parents[1] / "orchestrator"
+ROOT = Path(__file__).resolve().parents[1]
+ORCHESTRATOR = ROOT / "orchestrator"
 sys.path.insert(0, str(ORCHESTRATOR))
 
 import project_test_contracts as contracts
@@ -88,6 +89,33 @@ class ProjectTestContractTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaisesRegex(contracts.TestContractError, "multiple code test contracts"):
             contracts.load_test_contracts(root)
+
+    def test_repository_contracts_cover_exact_current_repair_capable_projects(self):
+        loaded = contracts.load_test_contracts(ROOT)
+        self.assertEqual(
+            set(loaded),
+            {
+                "ai-prof-control-center",
+                "ak-bermet",
+                "kol-travel-platform",
+                "resort-os",
+            },
+        )
+        for item in loaded.values():
+            self.assertEqual(item["required_outcome"], "STAGE_01C_AUDIT_PASS")
+            self.assertRegex(item["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_test_contract_authority_is_not_in_self_maintenance_allowlist(self):
+        payload = json.loads((ROOT / "orchestrator" / "projects.json").read_text(encoding="utf-8"))
+        self_project = next(
+            item for item in payload["projects"]
+            if item["project_id"] == "ai-prof-control-center"
+        )
+        allowed = set(self_project["allowed_scope"])
+        self.assertNotIn("orchestrator/project_test_contracts.json", allowed)
+        self.assertNotIn("orchestrator/project_test_contracts.py", allowed)
+        self.assertNotIn("orchestrator/repair_task_bridge.py", allowed)
+        self.assertNotIn("orchestrator/incident_diagnosis_runner.py", allowed)
 
 
 if __name__ == "__main__":
