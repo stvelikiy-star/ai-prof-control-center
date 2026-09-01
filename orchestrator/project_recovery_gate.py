@@ -2,21 +2,22 @@
 
 This module records and validates recovery evidence only; it performs no backup,
 restore, rollback or deployment. A project is production recovery-ready only
-when the reviewed contract explicitly says so *and* every checkpoint, rollback,
-restore-test and fault-injection evidence reference resolves to a real tracked
-source file containing the declared marker. Unknown, stale or partial recovery
-state fails closed.
+when the reviewed contract explicitly says so, every evidence reference resolves
+to a real source marker, and recovery has been verified at staging or production
+level. Unit/shadow evidence can improve confidence but never grants production
+authority by itself. Unknown, stale or partial recovery state fails closed.
 """
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from project_registry import load_projects, project_enabled
 
 CONTRACT_VERSION = 1
 ALLOWED_MODES = {"unverified", "prepare_only", "staged_activation", "verified"}
+ALLOWED_VERIFICATION_LEVELS = {"none", "unit", "shadow", "staging", "production"}
+PRODUCTION_CAPABLE_LEVELS = {"staging", "production"}
 MAX_EVIDENCE_FILE_BYTES = 2 * 1024 * 1024
 
 
@@ -122,6 +123,7 @@ def load_recovery_contracts(root: Path) -> dict[str, dict]:
     required = {
         "project_id",
         "recovery_mode",
+        "verification_level",
         "checkpoint_evidence",
         "rollback_evidence",
         "restore_test_evidence",
@@ -140,6 +142,9 @@ def load_recovery_contracts(root: Path) -> dict[str, dict]:
         mode = item.get("recovery_mode")
         if mode not in ALLOWED_MODES:
             raise RecoveryGateError(f"invalid recovery mode: {project_id}")
+        verification_level = item.get("verification_level")
+        if verification_level not in ALLOWED_VERIFICATION_LEVELS:
+            raise RecoveryGateError(f"invalid recovery verification level: {project_id}")
         checkpoint = _evidence_list(root, item, "checkpoint_evidence")
         rollback = _evidence_list(root, item, "rollback_evidence")
         restore = _evidence_list(root, item, "restore_test_evidence")
@@ -151,6 +156,10 @@ def load_recovery_contracts(root: Path) -> dict[str, dict]:
             if mode != "verified":
                 raise RecoveryGateError(
                     f"production-ready recovery contract must use verified mode: {project_id}"
+                )
+            if verification_level not in PRODUCTION_CAPABLE_LEVELS:
+                raise RecoveryGateError(
+                    f"production-ready recovery contract requires staging verification: {project_id}"
                 )
             if not checkpoint or not rollback or not restore or not fault:
                 raise RecoveryGateError(
@@ -186,6 +195,8 @@ def recovery_readiness(root: Path, project_id: str) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     if item["recovery_mode"] != "verified":
         blockers.append("RECOVERY_MODE_NOT_VERIFIED")
+    if item["verification_level"] not in PRODUCTION_CAPABLE_LEVELS:
+        blockers.append("RECOVERY_VERIFICATION_LEVEL_INSUFFICIENT")
     if not item["checkpoint_evidence"]:
         blockers.append("CHECKPOINT_EVIDENCE_MISSING")
     if not item["rollback_evidence"]:
