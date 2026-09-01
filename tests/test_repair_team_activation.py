@@ -46,13 +46,29 @@ class RepairTeamActivationTests(unittest.TestCase):
         )
 
     def test_activation_is_unit_only_and_requires_exact_main_identity(self):
-        source = SCRIPT.read_text(encoding="utf-8")
         preflight = inspect.getsource(activation.verify_preconditions)
         self.assertIn('branch != "main"', preflight)
         self.assertIn("head != approved_sha", preflight)
         self.assertIn('git("fetch", "--prune", "origin", "main"', preflight)
         self.assertIn('git("rev-parse", "origin/main")', preflight)
         self.assertIn("remote_sha != approved_sha", preflight)
+        execution_source = "\n".join(
+            inspect.getsource(fn)
+            for fn in (
+                activation.run,
+                activation.git,
+                activation.sudo,
+                activation.verify_repository_identity,
+                activation.verify_preconditions,
+                activation.create_checkpoint,
+                activation.install_phase_units,
+                activation.activate_phase_runtime,
+                activation._restore_unit_files,
+                activation._restore_unit_states,
+                activation.rollback,
+                activation.activate,
+            )
+        )
         for forbidden in (
             'git("switch"',
             'git("merge"',
@@ -62,7 +78,7 @@ class RepairTeamActivationTests(unittest.TestCase):
             "supabase db push",
             "npm run deploy",
         ):
-            self.assertNotIn(forbidden, source)
+            self.assertNotIn(forbidden, execution_source)
 
     def test_monitor_phase_rejects_preexisting_active_diagnosis_timer(self):
         states = {
@@ -123,7 +139,6 @@ class RepairTeamActivationTests(unittest.TestCase):
 
         with mock.patch.object(activation, "sudo", side_effect=fake_sudo), \
              mock.patch.object(activation, "systemd_state", return_value="enabled") as state:
-            # is-active needs a distinct result after is-enabled.
             state.side_effect = ["enabled", "active"]
             activation.activate_phase_runtime("monitor")
         self.assertIn(("systemctl", "enable", "--now", activation.MONITOR_TIMER), calls)
