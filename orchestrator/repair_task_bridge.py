@@ -41,6 +41,7 @@ AUTOMATIC_REPAIR_DENY_PREFIXES = (
     "tests/",
     ".github/workflows/",
     "systemd/",
+    "scripts/",
     "supabase/migrations/",
     "automation/n8n/",
 )
@@ -335,7 +336,7 @@ def bridge_result(root: Path, state_root: Path, result_path: Path) -> BridgeResu
             f"Repair incident {incident_id}. Validated root cause: {root_cause}. "
             "Make the minimum safe code change inside Scope-Files only. Preserve business rules, "
             "prices, legal rules, credentials, permissions, production data and unrelated behavior. "
-            "Do not modify tests, test/toolchain configuration, migrations, deployment surfaces, "
+            "Do not modify tests, test/toolchain configuration, scripts, migrations, deployment surfaces, "
             "or Repair Team authority files. Run every Required-Check and leave production deployment out of scope.",
             submit_task.INSTRUCTION_LIMIT,
         )
