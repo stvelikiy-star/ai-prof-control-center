@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
-from project_registry import validate_task_base_branch
+from project_registry import project_for_task, validate_task_base_branch
+from project_test_contracts import TestContractError, contract_for_project
 
 
 REQUIRED_FIELDS = [
@@ -32,6 +33,17 @@ REQUIRED_FIELDS = [
     "Required-Commands",
     "Required-Environment",
     "Owner-Approval-Required",
+]
+
+INCIDENT_REPAIR_METADATA_FIELDS = [
+    "Repair-Origin",
+    "Incident-ID",
+    "Diagnosis-SHA256",
+    "Repair-Response-Class",
+    "Repair-Runbook-IDs",
+    "Test-Contract-ID",
+    "Test-Contract-SHA256",
+    "Test-Contract-Outcome",
 ]
 
 EXECUTION_MODES = {"code", "operations"}
@@ -107,6 +119,10 @@ def parse_task(path: Path) -> tuple[dict[str, str], str]:
         raise ValueError("Operation-Profile is required for operations mode")
     if values["Execution-Mode"] == "code" and values["Operation-Profile"] != "none":
         raise ValueError("Operation-Profile is only valid for operations mode")
+    for field in INCIDENT_REPAIR_METADATA_FIELDS:
+        match = re.search(rf"(?mi)^\s*{re.escape(field)}:\s*(.+?)\s*$", text)
+        if match:
+            values[field] = match.group(1).strip()
     return values, text
 
 
@@ -204,6 +220,48 @@ def validate_access(data: dict[str, str]) -> None:
         raise RuntimeError("BLOCKED_MISSING_ENVIRONMENT: " + ", ".join(missing_env))
 
 
+def validate_incident_repair_contract(root: Path, data: dict[str, str]) -> None:
+    """Revalidate trusted contract authority for automatically generated repairs."""
+    origin = data.get("Repair-Origin", "")
+    present_reserved = [
+        field for field in INCIDENT_REPAIR_METADATA_FIELDS
+        if field != "Repair-Origin" and data.get(field)
+    ]
+    if not origin:
+        if present_reserved:
+            raise RuntimeError("BLOCKED_RESERVED_REPAIR_METADATA")
+        return
+    if origin != "incident":
+        raise RuntimeError("BLOCKED_RESERVED_REPAIR_METADATA")
+    if data.get("Execution-Mode") != "code":
+        raise RuntimeError("BLOCKED_INCIDENT_REPAIR_MODE")
+    missing = [field for field in INCIDENT_REPAIR_METADATA_FIELDS if not data.get(field)]
+    if missing:
+        raise RuntimeError(
+            "BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: missing metadata: " + ", ".join(missing)
+        )
+    try:
+        project = project_for_task(root, data["Project-Path"])
+        project_id = project["project_id"]
+        contract = contract_for_project(root, project_id)
+    except (ValueError, TestContractError, KeyError) as exc:
+        raise RuntimeError(f"BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: {exc}") from exc
+    expected_checks = ", ".join(contract["required_checks"])
+    mismatches = []
+    if data["Test-Contract-ID"] != contract["contract_id"]:
+        mismatches.append("id")
+    if data["Test-Contract-SHA256"] != contract["sha256"]:
+        mismatches.append("sha256")
+    if data["Test-Contract-Outcome"] != contract["required_outcome"]:
+        mismatches.append("outcome")
+    if data["Required-Checks"] != expected_checks:
+        mismatches.append("required_checks")
+    if mismatches:
+        raise RuntimeError(
+            "BLOCKED_REPAIR_TEST_CONTRACT_DRIFT: " + ", ".join(mismatches)
+        )
+
+
 def acquire_lock(lock_path: Path):
     """Acquire the orchestrator's exclusive non-blocking lock.
 
@@ -268,6 +326,7 @@ def process_one(paths: Paths) -> int:
         except ValueError as exc:
             raise RuntimeError(f"BLOCKED_INVALID_BASE_BRANCH: {exc}") from exc
 
+        validate_incident_repair_contract(paths.root, data)
         validate_access(data)
         context = load_context(paths.root, data["Agent-Context"])
 
