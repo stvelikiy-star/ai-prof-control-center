@@ -1,0 +1,23 @@
+[Unit]
+Description=AI PROF Repair Team read-only monitoring and incident reconciliation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent
+Group=agent
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/incident_engine.py
+Environment=HOME=/home/agent
+Environment=AI_PROF_STATE_DIR=/home/agent/.local/state/ai-prof-control-center
+SuccessExitStatus=0 1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/agent/.local/state/ai-prof-control-center
+UMask=0077
+
+[Install]
+WantedBy=default.target
