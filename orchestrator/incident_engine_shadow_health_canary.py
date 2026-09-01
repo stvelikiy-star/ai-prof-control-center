@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
+from pathlib import Path
 
 try:
     from orchestrator import incident_engine_canary as canary
@@ -41,8 +42,8 @@ def shadow_health_observation(state_root):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=type(base.DEFAULT_ROOT), default=base.DEFAULT_ROOT)
-    parser.add_argument("--state-root", type=type(base.DEFAULT_STATE_ROOT), default=base.DEFAULT_STATE_ROOT)
+    parser.add_argument("--root", type=Path, default=base.DEFAULT_ROOT)
+    parser.add_argument("--state-root", type=Path, default=base.DEFAULT_STATE_ROOT)
     parser.add_argument("--project")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
