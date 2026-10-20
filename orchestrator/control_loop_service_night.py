@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
 from pathlib import Path
 
 try:  # Package import under tests.
@@ -232,7 +234,65 @@ def _commands_with_night_safe_ai_prof_gate(
     ]
 
 
+def _night_self_test() -> int:
+    """Test both the untouched supervisor contract and the composed night pipeline.
+
+    The base self-test deliberately asserts the six unextended stages.  Run it
+    before monkeypatching the live stage composer, then check the full night
+    composition separately.  Do not weaken the base stage-order assertion.
+    """
+    rc = base.control_loop.run_self_test()
+    with tempfile.TemporaryDirectory(prefix="ai-prof-night-test-") as tmp:
+        root = Path(tmp)
+        runtime = root / "state"
+        commands = _commands_with_night_safe_ai_prof_gate(root, runtime)
+        stages = [name for name, _ in commands]
+        expected = [
+            "kol_approved_publisher_pre",
+            "ak_bermet_approved_publisher_pre",
+            "ai_prof_approved_publisher_pre",
+            "auto_repair_pre",
+            "operations",
+            "stage_01a",
+            "codex_stage_01b",
+            "auto_repair_post",
+            "codex",
+            "kol_approved_publisher_post",
+            "ak_bermet_approved_publisher_post",
+            "ai_prof_approved_publisher_post",
+        ]
+        if stages != expected:
+            raise RuntimeError("NIGHT_SELF_TEST_STAGE_ORDER_FAILED")
+        mapping = dict(commands)
+        if str(root / "orchestrator/operations_runner_night.py") not in mapping["operations"]:
+            raise RuntimeError("NIGHT_SELF_TEST_OPERATIONS_BINDING_FAILED")
+        if str(root / "orchestrator/codex_stage01b_runner_v2.py") not in mapping["codex_stage_01b"]:
+            raise RuntimeError("NIGHT_SELF_TEST_CODEX_BINDING_FAILED")
+
+        # Use only a temporary task to assert KÖL cross-project isolation.
+        queue = runtime / "queue/pending"
+        queue.mkdir(parents=True)
+        (queue / "isolation-test.md").write_text(
+            "Project-Path: " + KOL_PROJECT_PATH + "\\n"
+            "Publication-Contract-Version: 4\\n",
+            encoding="utf-8",
+        )
+        isolated = _commands_with_night_safe_ai_prof_gate(root, runtime)
+        isolated_stages = [name for name, _ in isolated]
+        if any(name in isolated_stages for name in AK_BERMET_PUBLISHER_STAGES):
+            raise RuntimeError("NIGHT_SELF_TEST_KOL_ISOLATION_FAILED")
+        if not _kol_v4_isolation_marker(runtime).is_file():
+            raise RuntimeError("NIGHT_SELF_TEST_KOL_LATCH_FAILED")
+        if "ai_prof_approved_publisher_pre" not in isolated_stages:
+            raise RuntimeError("NIGHT_SELF_TEST_AI_PROF_GATE_MISSING")
+
+    print("NIGHT_WATCH_SELF_TEST_PASS")
+    return rc
+
+
 def main() -> int:
+    if "--self-test" in sys.argv:
+        return _night_self_test()
     base.control_loop.write_heartbeat = _night_write_heartbeat
     base.control_loop.campaign_runner.tick_all = _night_campaign_tick_all
     base._commands_with_ai_prof_publisher_gate = _commands_with_night_safe_ai_prof_gate
