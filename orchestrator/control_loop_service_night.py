@@ -273,8 +273,8 @@ def _night_self_test() -> int:
         queue = runtime / "queue/pending"
         queue.mkdir(parents=True)
         (queue / "isolation-test.md").write_text(
-            "Project-Path: " + KOL_PROJECT_PATH + "\\n"
-            "Publication-Contract-Version: 4\\n",
+            "Project-Path: " + KOL_PROJECT_PATH + "\n"
+            "Publication-Contract-Version: 4\n",
             encoding="utf-8",
         )
         isolated = _commands_with_night_safe_ai_prof_gate(root, runtime)
