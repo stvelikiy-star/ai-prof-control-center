@@ -12,6 +12,8 @@ import json
 import os
 import re
 import shutil
+import threading
+import time
 import subprocess
 from pathlib import Path
 
@@ -328,9 +330,87 @@ def extended_handle_update(update: object, config: legacy.Config, client: legacy
     return legacy.handle_update_original(update, config, client)
 
 
+
+# Owner-only notifications; this reader never changes task queues or project files.
+WATCH_POLL_SECONDS = 30
+WATCHED_QUEUES = frozenset({"pending", "active", "review", "pending_codex", "approved", "completed", "blocked", "failed"})
+WATCH_LABELS = {
+    "pending": "queued", "active": "running", "review": "review",
+    "pending_codex": "Codex audit", "approved": "passed",
+    "completed": "completed", "blocked": "blocked", "failed": "failed",
+}
+
+
+def task_state_snapshot() -> dict[str, tuple[str, str, str]]:
+    """Capture queue facts only. No instructions, secrets or raw task text."""
+    projects = _projects()
+    project_by_path = {str(item.get("path", "")): pid for pid, item in projects.items()}
+    result: dict[str, tuple[str, str, str]] = {}
+    for task_id, locations in legacy._queue_locations(STATE_ROOT).items():
+        if not TASK_ID_RE.fullmatch(task_id):
+            continue
+        if len(locations) != 1:
+            result[task_id] = ("inconsistent", "unknown", "")
+            continue
+        queue, _path, fields = locations[0]
+        if queue not in WATCHED_QUEUES:
+            continue
+        project = project_by_path.get(fields.get("Project-Path", ""), "unknown")
+        reason = legacy._terminal_reason(queue, fields) if queue in {"blocked", "failed"} else ""
+        result[task_id] = (queue, project, reason)
+    return result
+
+
+def task_change_messages(before: dict, after: dict) -> list[str]:
+    """Only new/changed states are announced; deletions and history are silent."""
+    messages: list[str] = []
+    for task_id, (queue, project, reason) in sorted(after.items()):
+        if before.get(task_id) == (queue, project, reason):
+            continue
+        if queue == "inconsistent":
+            status = "WARNING: duplicate task queue entries"
+        else:
+            status = WATCH_LABELS.get(queue, queue)
+        lines = ["AI PROF task update", f"Project: {_sanitize(project, 80)}",
+                 f"Task-ID: {task_id}", f"State: {status}"]
+        if reason:
+            lines.append(f"Reason: {_sanitize(reason, 160)}")
+        messages.append(legacy._telegram_truncate("\n".join(lines)))
+    return messages
+
+
+def watch_task_changes(client: legacy.TelegramClient, *, poll_seconds: int = WATCH_POLL_SECONDS) -> None:
+    """Passive best-effort notifications. Restart baselines existing tasks silently."""
+    try:
+        previous = task_state_snapshot()
+    except (OSError, ValueError, legacy.BridgeError):
+        previous = {}
+    while True:
+        time.sleep(poll_seconds)
+        try:
+            current = task_state_snapshot()
+            for message in task_change_messages(previous, current):
+                try:
+                    client.send(message)
+                except (OSError, ValueError, legacy.BridgeError) as exc:
+                    # Never stop the command bridge over a notification failure.
+                    legacy.logging.warning("task notification failed: %s", _sanitize(exc, 120))
+            previous = current
+        except (OSError, ValueError, legacy.BridgeError) as exc:
+            legacy.logging.warning("task watcher read failed: %s", _sanitize(exc, 120))
+
+
+
 def main() -> int:
     legacy.handle_update_original = legacy.handle_update
     legacy.handle_update = extended_handle_update
+    # Use the same owner-only chat configuration as inbound command handling.
+    try:
+        config = legacy.load_config()
+    except legacy.BridgeError:
+        return legacy.main()
+    client = legacy.TelegramClient(config)
+    threading.Thread(target=watch_task_changes, args=(client,), daemon=True, name="ai-prof-task-watch").start()
     return legacy.main()
 
 
