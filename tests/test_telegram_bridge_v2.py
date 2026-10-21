@@ -129,6 +129,37 @@ class TelegramBridgeV2Tests(unittest.TestCase):
         self.assertIn("DEMO_", text)
         self.assertNotIn("OTHER_", text)
 
+    def test_task_change_notifications_deduplicate_and_redact_reason(self):
+        task = "AK_BERMET_20261021T120000Z_A1B2C3"
+        previous = {task: ("pending", "ak-bermet", "")}
+        unchanged = dict(previous)
+        self.assertEqual(v2.task_change_messages(previous, unchanged), [])
+        updated = {task: ("failed", "ak-bermet", "password=SECRETEXAMPLE")}
+        messages = v2.task_change_messages(previous, updated)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("State: failed", messages[0])
+        self.assertNotIn("SECRETEXAMPLE", messages[0])
+        self.assertIn("[REDACTED]", messages[0])
+        self.assertEqual(v2.task_change_messages(updated, updated), [])
+
+    def test_task_change_does_not_announce_removed_tasks(self):
+        previous = {"AK_BERMET_20261021T120000Z_A1B2C3": ("completed", "ak-bermet", "")}
+        self.assertEqual(v2.task_change_messages(previous, {}), [])
+
+    def test_task_snapshot_is_read_only_and_rejects_invalid_id(self):
+        records = {
+            "bad/id": [("pending", Path("bad.md"), {"Project-Path": "/tmp/demo"})],
+            "DEMO_20261021T120000Z_ABCDEF": [
+                ("completed", Path("ok.md"), {"Project-Path": "/tmp/demo"})
+            ],
+        }
+        with mock.patch.object(v2, "_projects", return_value={"demo": {"path": "/tmp/demo"}}), \
+             mock.patch.object(legacy, "_queue_locations", return_value=records):
+            snapshot = v2.task_state_snapshot()
+        self.assertEqual(snapshot, {
+            "DEMO_20261021T120000Z_ABCDEF": ("completed", "demo", "")
+        })
+
     def test_task_id_validation_rejects_free_form_shell_text(self):
         for value in ("; rm -rf /", "$(id)", "../../task", "AK BER MET"):
             self.assertEqual(v2.task_details(value), "Invalid Task-ID.")
