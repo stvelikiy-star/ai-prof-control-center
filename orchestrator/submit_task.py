@@ -40,7 +40,16 @@ class IntakeError(ValueError):
     pass
 
 
-def read_registry(root: Path, *, validate_project: bool = True) -> dict:
+def read_registry(
+    root: Path, *, validate_project: bool = True,
+    selected_project: str | None = None,
+) -> dict:
+    """Validate all policy entries; inspect only a selected checkout for intake.
+
+    The default remains a strict full inventory check. A task for one project
+    must not depend on unrelated checkouts still being installed on this host.
+    No structural or authority validation is skipped for unrelated entries.
+    """
     path = root / "orchestrator" / "projects.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -86,12 +95,14 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
         if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
             raise IntakeError(f"project path must be absolute: {project_id}")
         project = Path(raw_path)
-        try:
-            resolved = project.resolve(strict=True)
-        except OSError as exc:
-            raise IntakeError(f"project unavailable: {project_id}: {exc}") from exc
-        if resolved != project:
-            raise IntakeError(f"project path may not traverse a symlink: {project_id}")
+        inspect_checkout = selected_project is None or selected_project == project_id
+        if inspect_checkout:
+            try:
+                resolved = project.resolve(strict=True)
+            except OSError as exc:
+                raise IntakeError(f"project unavailable: {project_id}: {exc}") from exc
+            if resolved != project:
+                raise IntakeError(f"project path may not traverse a symlink: {project_id}")
         if not isinstance(item["work_prefixes"], list) or not item["work_prefixes"]:
             raise IntakeError(f"invalid work prefixes: {project_id}")
         if not isinstance(item["allowed_scope"], list) or not item["allowed_scope"]:
@@ -103,7 +114,7 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
         context = (root / item["agent_context"]).resolve()
         if root.resolve() not in context.parents or not context.is_dir():
             raise IntakeError(f"invalid agent context: {project_id}")
-        if validate_project:
+        if validate_project and inspect_checkout:
             if not (project / ".git").is_dir():
                 raise IntakeError(f"project is not a Git repository: {project_id}")
             for branch in branches:
@@ -422,7 +433,9 @@ def main() -> int:
     root = Path(args.root).resolve()
     runtime = initialize(args.state_root)
     try:
-        projects = read_registry(root)
+        projects = read_registry(
+            root, selected_project=args.project if args.command == "create" else None,
+        )
         if args.command == "projects":
             emit([
                 {

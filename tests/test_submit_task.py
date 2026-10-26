@@ -259,6 +259,83 @@ class SubmitTaskTests(unittest.TestCase):
             with mock.patch.object(sys, "argv", argv):
                 self.assertEqual(submit.main(), 2)
 
+    def add_unavailable_project(self, root):
+        path = root / "orchestrator/projects.json"
+        data = json.loads(path.read_text())
+        missing = dict(data["projects"][0], project_id="missing",
+                       path=str(root.parent / "removed-project"))
+        data["projects"].insert(0, missing)
+        path.write_text(json.dumps(data))
+        return path
+
+    def create_arguments(self, root, project="pilot"):
+        return [
+            "submit_task.py", "--root", str(root), "--state-root", str(root),
+            "--json", "create", "--project", project, "--title", "Diagnostic",
+            "--instructions", "Run only the approved diagnostic",
+            "--work-branch", "fix/diagnostic", "--scope", "README.md",
+        ]
+
+    def test_create_healthy_project_when_unrelated_checkout_was_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _ = self.make_root(Path(tmp))
+            self.add_unavailable_project(root)
+            with mock.patch.object(sys, "argv", self.create_arguments(root)):
+                self.assertEqual(submit.main(), 0)
+            pending = list((root / "queue/pending").glob("*.md"))
+            self.assertEqual(len(pending), 1)
+            self.assertIn("Project-Path: " + str(root.parent / "pilot"), pending[0].read_text())
+
+    def test_create_still_rejects_missing_selected_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _ = self.make_root(Path(tmp))
+            self.add_unavailable_project(root)
+            with mock.patch.object(sys, "argv", self.create_arguments(root, "missing")):
+                self.assertEqual(submit.main(), 2)
+            self.assertFalse(list((root / "queue/pending").glob("*.md")))
+
+    def test_create_still_rejects_selected_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, project = self.make_root(Path(tmp))
+            path = self.add_unavailable_project(root)
+            link = root.parent / "linked-project"
+            link.symlink_to(project, target_is_directory=True)
+            data = json.loads(path.read_text())
+            data["projects"][1]["path"] = str(link)
+            path.write_text(json.dumps(data))
+            with mock.patch.object(sys, "argv", self.create_arguments(root)):
+                self.assertEqual(submit.main(), 2)
+            self.assertFalse(list((root / "queue/pending").glob("*.md")))
+
+    def test_create_still_validates_unrelated_authority_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _ = self.make_root(Path(tmp))
+            path = self.add_unavailable_project(root)
+            data = json.loads(path.read_text())
+            data["projects"][0]["allow_deployment"] = True
+            path.write_text(json.dumps(data))
+            with mock.patch.object(sys, "argv", self.create_arguments(root)):
+                self.assertEqual(submit.main(), 2)
+            self.assertFalse(list((root / "queue/pending").glob("*.md")))
+
+    def test_registry_inventory_still_reports_missing_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _ = self.make_root(Path(tmp))
+            self.add_unavailable_project(root)
+            with self.assertRaisesRegex(submit.IntakeError, "project unavailable: missing"):
+                submit.read_registry(root)
+
+    def test_create_still_rejects_missing_selected_base_branch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _ = self.make_root(Path(tmp))
+            path = self.add_unavailable_project(root)
+            data = json.loads(path.read_text())
+            data["projects"][1]["base_branch"] = "missing-branch"
+            path.write_text(json.dumps(data))
+            with mock.patch.object(sys, "argv", self.create_arguments(root)):
+                self.assertEqual(submit.main(), 2)
+            self.assertFalse(list((root / "queue/pending").glob("*.md")))
+
 
 if __name__ == "__main__":
     unittest.main()
