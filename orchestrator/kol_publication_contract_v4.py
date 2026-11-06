@@ -231,7 +231,7 @@ def render_task(
 
 
 def submit_contract(number: int, contract: dict[str, Any]) -> dict[str, str]:
-    projects = submit.read_registry(gateway.ROOT)
+    projects = submit.read_registry(gateway.ROOT, selected_project=PROJECT)
     project = projects.get(PROJECT)
     if not isinstance(project, dict):
         raise KolV4Error("KÖL project registry entry is unavailable")

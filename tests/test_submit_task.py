@@ -75,10 +75,22 @@ class SubmitTaskTests(unittest.TestCase):
         )
         project = next(
             item for item in registry["projects"] if item["project_id"] == "ak-bermet"
-        )
-        text = submit.render_task(
-            project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
-        )
+        ).copy()
+        # The historical checkout may have been removed from this Ubuntu.
+        # Validate check-script contracts using an isolated fixture instead
+        # of weakening the real npm-script verification or restoring a fake repo.
+        with tempfile.TemporaryDirectory() as tmp:
+            project["path"] = tmp
+            (Path(tmp) / "package.json").write_text(
+                json.dumps({"scripts": {
+                    "lint": "eslint .",
+                    "test:inspection": "node --test",
+                    "build": "next build",
+                }}), encoding="utf-8",
+            )
+            text = submit.render_task(
+                project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
+            )
         self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
         self.assertIn(
             "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
@@ -150,6 +162,40 @@ class SubmitTaskTests(unittest.TestCase):
             item = projects["pilot"]
             for key in ("allow_commits", "allow_push", "allow_merge", "allow_deployment"):
                 self.assertIs(item[key], False)
+
+    def test_selected_project_intake_survives_unrelated_missing_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            registry_path = root / "orchestrator/projects.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            offline = dict(registry["projects"][0])
+            offline["project_id"] = "offline"
+            offline["path"] = str(Path(tmp) / "removed-project")
+            registry["projects"].append(offline)
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            selected = submit.read_registry(root, selected_project="pilot")
+            self.assertEqual(set(selected), {"pilot", "offline"})
+            with self.assertRaisesRegex(submit.IntakeError, "project unavailable: offline"):
+                submit.read_registry(root)
+            with self.assertRaisesRegex(submit.IntakeError, "project unavailable: offline"):
+                submit.read_registry(root, selected_project="offline")
+
+    def test_selected_project_must_be_enabled_and_not_symlinked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, project = self.make_root(Path(tmp))
+            registry_path = root / "orchestrator/projects.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            registry["projects"][0]["enabled"] = False
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with self.assertRaisesRegex(submit.IntakeError, "project is disabled: pilot"):
+                submit.read_registry(root, selected_project="pilot")
+            registry["projects"][0]["enabled"] = True
+            alias = Path(tmp) / "alias"
+            alias.symlink_to(project, target_is_directory=True)
+            registry["projects"][0]["path"] = str(alias)
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with self.assertRaisesRegex(submit.IntakeError, "symlink"):
+                submit.read_registry(root, selected_project="pilot")
 
     def test_scope_security_rejections(self):
         with tempfile.TemporaryDirectory() as tmp:

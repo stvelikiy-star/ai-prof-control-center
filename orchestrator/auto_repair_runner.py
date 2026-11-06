@@ -587,8 +587,17 @@ def process_one(paths: Paths) -> int:
         if recover_review_limit(paths, task, max_cycles):
             return 0
     for task in sorted(paths.failed.glob("*.md")):
-        if recover_check_failure(paths, task, max_cycles):
-            return 0
+        try:
+            if recover_check_failure(paths, task, max_cycles):
+                return 0
+        except AutoRepairError as exc:
+            # A removed project is not a recoverable worktree. Preserve the
+            # failed task and all evidence without retrying or reassigning it
+            # to another project's checkout. Continue checking other tasks.
+            if str(exc).startswith("project is not accessible: "):
+                print("AUTO_REPAIR_DEFERRED_MISSING_PROJECT task_id=" + task.stem)
+                continue
+            raise
     print("AUTO_REPAIR_QUEUE_EMPTY")
     return 0
 
