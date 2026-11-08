@@ -493,6 +493,26 @@ def validate_checks_executed(expected: list[str], reported: list[str]) -> None:
         )
 
 
+def summarize_failed_agent_output(result, max_chars: int = 500) -> str:
+    """Capture diagnostic tail instead of CLI banner/prompt; redact before persistence."""
+    stderr = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    if stderr:
+        # CLI may echo its entire input prompt before the failure. Prefer lines
+        # indicating actual errors rather than exposing task instructions.
+        lines = stderr.splitlines()
+        signal = [
+            line.strip() for line in lines
+            if re.search(r"(?i)(^error[: ]|^fatal[: ]|failed|denied|unavailable|"
+                         r"timed? out|connection|rejected|rate.limit|quota|"
+                         r"invalid.model|unsupported.model|unexpected.error)", line)
+        ]
+        detail = "\n".join(signal[-6:]) if signal else "\n".join(lines[-5:])
+    else:
+        detail = "\n".join(stdout.splitlines()[-6:]) if stdout else "no diagnostic output"
+    return orch.redact(detail)[-max_chars:]
+
+
 def run_allowed_checks(
     argvs: list[list[str]], project: Path, node_toolchain: NodeToolchain | None = None,
 ) -> list[str]:
@@ -1745,14 +1765,15 @@ def process_one(paths: ClaudePaths) -> int:
                 bundle, workspace_dir, mcp_config_path, node_toolchain=node_toolchain,
             )
             if result.returncode != 0:
-                detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()[:500]
+                detail = summarize_failed_agent_output(result)
+                raw_failure = f"{result.stdout or ''}\n{result.stderr or ''}"
                 retry_detail = json.dumps(claude_attempts, sort_keys=True)
-                if is_claude_auth_failure(detail):
+                if is_claude_auth_failure(raw_failure):
                     raise ClaudeAuthError(
                         f"BLOCKED_CLAUDE_AUTH: claude authentication failed: {detail}; "
                         f"attempts={retry_detail}"
                     )
-                if is_claude_permission_failure(detail):
+                if is_claude_permission_failure(raw_failure):
                     raise ClaudePermissionError(
                         f"BLOCKED_CLAUDE_PERMISSION: claude account/permission failure: {detail}; "
                         f"attempts={retry_detail}"
