@@ -257,9 +257,9 @@
       "project_id": "kol-travel-platform",
       "path": "/home/agent/Загрузки/kol-travel-platform",
       "enabled": true,
-      "base_branch": "main",
+      "base_branch": "integration/kol-unified-20261105",
       "allowed_base_branches": [
-        "main"
+        "integration/kol-unified-20261105"
       ],
       "work_prefixes": [
         "feature/",
@@ -318,7 +318,7 @@
     {
       "project_id": "resort-os",
       "path": "/home/agent/projects/resort-os",
-      "enabled": true,
+      "enabled": false,
       "base_branch": "main",
       "allowed_base_branches": [
         "main"

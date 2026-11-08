@@ -49,21 +49,22 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
 
     def test_resort_os_uses_allowlisted_repository_owned_monorepo_contract(self):
         project = self.by_id["resort-os"]
-        self.assertIs(project["enabled"], True)
-        self.assertNotIn("disabled_reason", project)
+        self.assertIs(project["enabled"], False)
         self.assertEqual(project["code_required_checks"], ["npm test"])
         self.assertIn("npm test", self.stage01b_allowed)
         self.assertNotIn("package.json", project["allowed_scope"])
         self.assertNotIn("control-center-verify.mjs", project["allowed_scope"])
         self.assertIn("package.json", project["forbidden_scope"])
         self.assertIn("control-center-verify.mjs", project["forbidden_scope"])
-        resolved = project_registry.project_for_task(ROOT, project["path"])
-        self.assertEqual(resolved["project_id"], "resort-os")
+        with self.assertRaises(project_registry.ProjectPolicyError):
+            project_registry.project_for_task(ROOT, project["path"])
 
     def test_kol_registry_matches_current_checkout_shape(self):
         project = self.by_id["kol-travel-platform"]
         self.assertEqual(project["path"], "/home/agent/Загрузки/kol-travel-platform")
         self.assertIs(project["enabled"], True)
+        self.assertEqual(project["base_branch"], "integration/kol-unified-20261105")
+        self.assertEqual(project["allowed_base_branches"], ["integration/kol-unified-20261105"])
         self.assertEqual(
             project["allowed_scope"],
             [
