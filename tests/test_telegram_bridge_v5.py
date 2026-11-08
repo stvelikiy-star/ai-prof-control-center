@@ -82,6 +82,19 @@ class TelegramV5Tests(unittest.TestCase):
                           return_value=["State: passed"]):
             messages = v5.task_change_messages_v5(source, target)
         self.assertIn("still pending", messages[0])
+    def test_main_installs_handler_without_running_real_poll(self):
+        import telegram_bridge_v2 as v2
+        original_handler = v2.extended_handle_update
+        original_messages = v2.task_change_messages
+        try:
+            with patch.object(v5.v4, "main", return_value=0) as start:
+                self.assertEqual(v5.main(), 0)
+                start.assert_called_once()
+                self.assertIs(v2.extended_handle_update, v5.handle_update_v5)
+                self.assertIs(v2.task_change_messages, v5.task_change_messages_v5)
+        finally:
+            v2.extended_handle_update = original_handler
+            v2.task_change_messages = original_messages
     def test_only_allowlisted_services(self):
         with self.assertRaises(ValueError):
             audit.service_state("ssh.service; rm -rf /")
