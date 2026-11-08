@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "orchestrator"))
+import telegram_bridge as legacy
+import telegram_bridge_v5 as v5
+import ai_prof_readonly_audit as audit
+
+class Client:
+    def __init__(self):
+        self.messages = []
+    def send(self, value):
+        self.messages.append(value)
+
+class TelegramV5Tests(unittest.TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.config = legacy.Config(token="fake", chat_id=19, owner_user_id=19)
+    def update(self, text):
+        return {"message": {"text": text}}
+    def test_owner_audit_is_read_only(self):
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            audit, "build_report", return_value="READ_ONLY_REPORT"
+        ), patch.object(v5, "_ORIGINAL_EXTENDED") as prior:
+            v5.handle_update_v5(self.update("/ai audit"), self.config, self.client)
+            self.assertEqual(self.client.messages, ["READ_ONLY_REPORT"])
+            prior.assert_not_called()
+    def test_non_owner_cannot_trigger_audit(self):
+        with patch.object(legacy, "authorized", return_value=False), patch.object(
+            audit, "build_report"
+        ) as report:
+            v5.handle_update_v5(self.update("/ai audit"), self.config, self.client)
+            report.assert_not_called()
+            self.assertEqual(self.client.messages, [])
+    def test_no_edit_audit_not_submitted_as_code(self):
+        command = "/ai task ai-prof-control-center | Аудит системы | Проверь сервер. Ничего не изменяй."
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            v5, "_ORIGINAL_EXTENDED"
+        ) as prior:
+            v5.handle_update_v5(self.update(command), self.config, self.client)
+            self.assertIn("/ai audit", self.client.messages[0])
+            prior.assert_not_called()
+    def test_regular_code_task_preserved(self):
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            v5, "_ORIGINAL_EXTENDED"
+        ) as prior:
+            update = self.update("/ai task ai-prof-control-center | Fix | Update README.md")
+            v5.handle_update_v5(update, self.config, self.client)
+            prior.assert_called_once_with(update, self.config, self.client)
+    def test_other_project_readonly_is_not_mutated(self):
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            v5, "_ORIGINAL_EXTENDED"
+        ) as prior:
+            update = self.update("/ai task ak-bermet | Аудит | Ничего не изменяй")
+            v5.handle_update_v5(update, self.config, self.client)
+            prior.assert_not_called()
+            self.assertIn("No task was created", self.client.messages[0])
+    def test_natural_language_audit_readonly(self):
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            audit, "build_report", return_value="SNAPSHOT"
+        ), patch.object(v5, "_ORIGINAL_EXTENDED") as prior:
+            v5.handle_update_v5(self.update("AI PROF проверь сервер!"), self.config, self.client)
+            self.assertEqual(self.client.messages, ["SNAPSHOT"])
+            prior.assert_not_called()
+    def test_unrecognized_natural_text_does_not_create_task(self):
+        with patch.object(legacy, "authorized", return_value=True), patch.object(
+            audit, "build_report"
+        ) as report, patch.object(v5, "_ORIGINAL_EXTENDED") as prior:
+            value = self.update("отправь письмо и удали файлы")
+            v5.handle_update_v5(value, self.config, self.client)
+            report.assert_not_called()
+            prior.assert_called_once()
+    def test_review_pass_does_not_claim_completion(self):
+        source = {"T": ("active", "ai-prof-control-center", "")}
+        target = {"T": ("approved", "ai-prof-control-center", "")}
+        with patch.object(v5, "_ORIGINAL_CHANGE_MESSAGES",
+                          return_value=["State: passed"]):
+            messages = v5.task_change_messages_v5(source, target)
+        self.assertIn("still pending", messages[0])
+    def test_only_allowlisted_services(self):
+        with self.assertRaises(ValueError):
+            audit.service_state("ssh.service; rm -rf /")
+    def test_queue_readonly_and_no_secret(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "queue" / "completed" / "AI_PROF_CONTROL_CENTER_20261108T151005Z_37A93D.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("Task-ID: AI_PROF_CONTROL_CENTER_20261108T151005Z_37A93D\n"
+                            "Project-Path: /home/agent/projects/ai-prof-control-center-maintenance\n"
+                            "Instructions: token=SHOULD_NOT_LEAK\n")
+            counts, last = audit.queue_overview(root)
+            self.assertEqual(counts.get("completed"), 1)
+            self.assertNotIn("SHOULD_NOT_LEAK", last)
+
+if __name__ == "__main__":
+    unittest.main()
