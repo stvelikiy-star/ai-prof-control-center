@@ -25,6 +25,14 @@ class CodexStage01BRunnerTests(unittest.TestCase):
         path.mkdir()
         return temp, path
 
+    def test_chatgpt_usage_limit_is_permission_blocker(self):
+        evidence = (
+            "ERROR: You've hit your usage limit. "
+            "Try again at Nov 9th, 2026 1:46 AM."
+        )
+        self.assertTrue(runner.is_codex_permission_failure(evidence))
+        self.assertFalse(runner.is_codex_auth_failure(evidence))
+
     def test_exact_workspace_write_argv(self):
         temp, workspace = self.workspace()
         self.addCleanup(temp.cleanup)
