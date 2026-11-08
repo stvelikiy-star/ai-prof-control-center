@@ -96,6 +96,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
     def test_target_gate_rejects_wrong_origin_before_github(self) -> None:
         project = gate.AK_BERMET_PROJECT
         with patch.object(
+            Path, "resolve", return_value=project,
+        ), patch.object(
             publisher,
             "git_text",
             side_effect=["https://example.invalid/wrong.git", "https://example.invalid/wrong.git"],
@@ -114,6 +116,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             "owner": {"login": gate.OWNER},
         }
         with patch.object(
+            Path, "resolve", return_value=project,
+        ), patch.object(
             publisher,
             "git_text",
             side_effect=[
@@ -148,6 +152,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
         for repo_payload in bad_payloads:
             with self.subTest(payload=repo_payload):
                 with patch.object(
+                    Path, "resolve", return_value=project,
+                ), patch.object(
                     publisher,
                     "git_text",
                     side_effect=[
