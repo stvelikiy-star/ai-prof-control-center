@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted offsite AI PROF recovery upload (requires real SFTP configuration)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+AccuracySec=1min
+Persistent=true
+Unit=ai-prof-offsite-sftp.service
+
+[Install]
+WantedBy=timers.target
