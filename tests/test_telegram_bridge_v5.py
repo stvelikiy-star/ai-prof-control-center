@@ -23,6 +23,54 @@ class TelegramV5Tests(unittest.TestCase):
         self.config = legacy.Config(token="fake", chat_id=19, owner_user_id=19)
     def update(self, text):
         return {"message": {"text": text}}
+    def test_approvals_is_owner_only_and_read_only(self):
+        with patch.object(legacy, "authorized", return_value=True), \
+             patch.object(v5, "owner_approvals_report",
+                          return_value="OWNER_REVIEW_ONLY"), \
+             patch.object(v5, "_ORIGINAL_EXTENDED") as previous:
+            v5.handle_update_v5(self.update("/ai approvals"),
+                                self.config, self.client)
+            self.assertEqual(self.client.messages, ["OWNER_REVIEW_ONLY"])
+            previous.assert_not_called()
+
+    def test_non_owner_cannot_read_approvals(self):
+        with patch.object(legacy, "authorized", return_value=False), \
+             patch.object(v5, "owner_approvals_report") as report:
+            v5.handle_update_v5(self.update("/ai approvals"),
+                                self.config, self.client)
+            report.assert_not_called()
+            self.assertEqual(self.client.messages, [])
+
+    def test_approvals_reports_evidence_without_mutating_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            approved = root / "queue/approved"
+            logs = root / "logs/orchestrator"
+            approved.mkdir(parents=True)
+            logs.mkdir(parents=True)
+            task_id = "KOL_TRAVEL_PLATFORM_20261109T063719Z_7899A5"
+            task = approved / (task_id + ".md")
+            task.write_text(
+                "Task-ID: " + task_id + "\n"
+                "Project-Path: /safe/kol\n"
+                "Instructions: token=REDACT_THIS_VALUE\n"
+            )
+            (logs / (task_id + "-01B-x.log")).write_text(
+                "STAGE_01B_CODEX_PASS\n"
+            )
+            (logs / (task_id + "-01C-x.log")).write_text(
+                "STAGE_01C_AUDIT_PASS\n"
+            )
+            with patch.object(v5.v2, "_projects", return_value={
+                "kol-travel-platform": {"path": "/safe/kol"}
+            }):
+                value = v5.owner_approvals_report(root)
+            self.assertIn("01B=PASS", value)
+            self.assertIn("01C=PASS", value)
+            self.assertIn("not published", value)
+            self.assertNotIn("REDACT_THIS_VALUE", value)
+            self.assertTrue(task.exists())
+
     def test_owner_audit_is_read_only(self):
         with patch.object(legacy, "authorized", return_value=True), patch.object(
             audit, "build_report", return_value="READ_ONLY_REPORT"

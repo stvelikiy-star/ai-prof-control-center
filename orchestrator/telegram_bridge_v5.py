@@ -2,6 +2,7 @@
 """Owner-only diagnostics adapter; preserves V4 authorization and all other routes."""
 from __future__ import annotations
 import re
+from pathlib import Path
 import telegram_bridge as legacy
 import telegram_bridge_v2 as v2
 import telegram_bridge_v4 as v4
@@ -14,6 +15,51 @@ NATURAL_AUDIT_REQUESTS = frozenset({
     "проведи аудит аи проф", "покажи состояние системы",
 })
 _ORIGINAL_CHANGE_MESSAGES = v2.task_change_messages
+
+
+def owner_approvals_report(state_root: Path = legacy.STATE_DIR) -> str:
+    """Read-only owner review list; never imply publication authority."""
+    projects = v2._projects()
+    project_for_path = {str(p.get("path")): name for name, p in projects.items()}
+    items = []
+    locations = legacy._queue_locations(state_root)
+    for task_id, entries in sorted(locations.items()):
+        if not v2.TASK_ID_RE.fullmatch(task_id) or len(entries) != 1:
+            continue
+        queue, _path, fields = entries[0]
+        if queue != "approved":
+            continue
+        project = project_for_path.get(fields.get("Project-Path"), "unknown")
+        # Only read fixed task-specific log names; never interpolate instructions.
+        evidence = []
+        for stage, marker in (("01B", "STAGE_01B_CODEX_PASS"),
+                              ("01C", "STAGE_01C_AUDIT_PASS")):
+            candidates = sorted((state_root / "logs/orchestrator").glob(
+                f"{task_id}-{stage}-*.log"))
+            verified = False
+            for path in candidates[-4:]:
+                try:
+                    if not path.is_file() or path.is_symlink() or path.stat().st_size > 150_000:
+                        continue
+                    if path.read_text(encoding="utf-8").startswith(marker + "\n"):
+                        verified = True
+                        break
+                except (OSError, UnicodeError):
+                    continue
+            evidence.append(f"{stage}={'PASS' if verified else 'NOT VERIFIED'}")
+        items.append(
+            f"{task_id}\nProject: {v2._sanitize(project, 80)}\n"
+            f"Audit: {', '.join(evidence)}\n"
+            "State: awaiting owner decision (not published)"
+        )
+    if not items:
+        return "AI PROF approvals: no tasks awaiting owner decision."
+    tail = f"\n+{len(items)-10} more" if len(items) > 10 else ""
+    return legacy._telegram_truncate(
+        "AI PROF — owner approvals (read-only)\n\n"
+        + "\n\n".join(items[:10]) + tail
+    )
+
 
 def task_change_messages_v5(before, after) -> list[str]:
     messages = _ORIGINAL_CHANGE_MESSAGES(before, after)
@@ -47,8 +93,11 @@ def handle_update_v5(update, config, client) -> None:
     remainder = remainder.strip()
     if remainder == "audit":
         return client.send(audit.build_report())
+    if remainder == "approvals":
+        return client.send(owner_approvals_report())
     if remainder == "help":
-        return client.send(v2.V2_HELP + "\nRead-only: /ai audit (system + queue snapshot)\n")
+        return client.send(v2.V2_HELP + "\nRead-only: /ai audit (system + queue snapshot)\n"
+                           "Owner review: /ai approvals (no publication)\n")
     command = legacy.parse_command(normalized)
     if (command is not None and command.name == "task"
         and is_readonly_intent(command.title, command.instructions)):
