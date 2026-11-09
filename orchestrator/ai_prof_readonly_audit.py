@@ -76,6 +76,28 @@ def queue_overview(state_root: Path = STATE) -> tuple[dict[str, int], str]:
     last = f"{recent[1]} ({recent[2]})" if recent else "none"
     return counts, last
 
+def pending_owner_review(state_root: Path = STATE) -> list[str]:
+    """Report approved-but-unfinished tasks without changing queue state."""
+    alerts: list[str] = []
+    now = datetime.now(timezone.utc).timestamp()
+    locations_by_id = bridge._queue_locations(state_root)
+    for task_id, locations in sorted(locations_by_id.items()):
+        if len(locations) != 1 or locations[0][0] != "approved":
+            continue
+        _queue, task_file, fields = locations[0]
+        try:
+            age = max(0, int((now - task_file.stat().st_mtime) // 3600))
+        except OSError:
+            age = 0
+        # Never reveal task instructions or any tokens; emit only canonical IDs.
+        if not isinstance(task_id, str) or len(task_id) > 120:
+            continue
+        if not all(ch.isascii() and (ch.isupper() or ch.isdigit() or ch == "_") for ch in task_id):
+            continue
+        marker = f"{task_id} ({age}h, owner review)"
+        alerts.append(marker)
+    return alerts[:3]
+
 def build_report(state_root: Path = STATE) -> str:
     lines = [
         "AI PROF — read-only operational audit",
@@ -95,12 +117,17 @@ def build_report(state_root: Path = STATE) -> str:
     try:
         counts, last = queue_overview(state_root)
         lines.append("Queue: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-        lines.append("Last queue transition: " + last)
+        lines.append("Most recently modified queue task: " + last)
+        for item in pending_owner_review(state_root):
+            lines.append("Pending approval resolution: " + item)
     except (OSError, ValueError):
         lines.append("Queue: UNKNOWN")
+    # Use df-style denominator (used + available). Total includes reserved
+    # filesystem blocks unavailable to non-root, so used/total understates risk.
     total, used, free = shutil.disk_usage("/")
-    usage = used * 100 // total if total else 100
-    lines.append(f"Disk: {usage}% used; {free // (1024**3)} GiB free")
+    usable = used + free
+    usage = (used * 100 + usable - 1) // usable if usable else 100
+    lines.append(f"Disk: {usage}% used (df-compatible); {free // (1024**3)} GiB free")
     lines.append("Disk: " + ("WARNING (>=80%)" if usage >= 80 else "PASS"))
     try:
         values = {}

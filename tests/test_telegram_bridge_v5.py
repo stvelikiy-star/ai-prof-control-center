@@ -95,6 +95,35 @@ class TelegramV5Tests(unittest.TestCase):
         finally:
             v2.extended_handle_update = original_handler
             v2.task_change_messages = original_messages
+    def test_pending_owner_review_does_not_read_task_secrets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            approved = root / "queue/approved"
+            approved.mkdir(parents=True)
+            task = approved / "AI_PROF_CONTROL_CENTER_20261108T151005Z_37A93D.md"
+            task.write_text(
+                "Task-ID: AI_PROF_CONTROL_CENTER_20261108T151005Z_37A93D\n"
+                "Instructions: TOKEN=NEVER_EXPOSE_THIS\n"
+            )
+            alerts = audit.pending_owner_review(root)
+            self.assertEqual(len(alerts), 1)
+            self.assertIn("owner review", alerts[0])
+            self.assertNotIn("NEVER_EXPOSE_THIS", alerts[0])
+
+    def test_df_compatible_disk_percentage(self):
+        from unittest.mock import patch
+        from collections import namedtuple
+        Usage = namedtuple("Usage", "total used free")
+        with patch.object(audit.shutil, "disk_usage",
+                          return_value=Usage(116 * 1024**3, 77 * 1024**3, 34 * 1024**3)), \
+             patch.object(audit, "service_state", return_value="PASS"), \
+             patch.object(audit, "container_state", return_value="PASS"), \
+             patch.object(audit, "n8n_readiness", return_value="PASS"), \
+             patch.object(audit.bridge, "control_center_health", return_value="healthy"), \
+             patch.object(audit, "queue_overview", return_value=({}, "none")):
+            report = audit.build_report()
+        self.assertIn("70% used (df-compatible)", report)
+
     def test_only_allowlisted_services(self):
         with self.assertRaises(ValueError):
             audit.service_state("ssh.service; rm -rf /")
