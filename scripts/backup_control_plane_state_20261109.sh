@@ -52,7 +52,7 @@ RESTORED_TASKS="$(find "$RESTORE_TMP/queue" -type f -name '*.md' | wc -l)"
 chmod 0600 "$OUT_TMP"
 mv -- "$OUT_TMP" "$FINAL"
 OUT_TMP=""
-sha256sum "$FINAL" > "$FINAL.sha256"
+(cd "$BACKUPS" && sha256sum "$(basename "$FINAL")") > "$FINAL.sha256"
 chmod 0600 "$FINAL.sha256"
 # Only remove old snapshots in this dedicated subdirectory after a verified new copy.
 find "$BACKUPS" -maxdepth 1 -type f -name 'control-plane-*.tar.gz.gpg*' -mtime +14 -delete

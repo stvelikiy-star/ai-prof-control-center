@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted AI PROF control-plane recovery snapshot
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+AccuracySec=1min
+Unit=ai-prof-control-plane-backup.service
+
+[Install]
+WantedBy=timers.target
