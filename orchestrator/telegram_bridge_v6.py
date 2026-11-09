@@ -95,6 +95,8 @@ def notify_once(client: legacy.TelegramClient, *, path: Path = STATE_PATH,
     """Only checkpoint successful sends; failed sends retry on next poll."""
     if snapshot is None:
         snapshot = enabled_task_snapshot()
+    if len(snapshot) > MAX_NOTIFIED_TASKS:
+        raise DeliveryStateError("active task snapshot exceeds notification limit")
     state = read_state(path)
     if state is None:
         # Baseline at first activation: do not flood the owner with months
@@ -102,6 +104,13 @@ def notify_once(client: legacy.TelegramClient, *, path: Path = STATE_PATH,
         write_state(path, {task: fingerprint(status)
                            for task, status in snapshot.items()})
         return 0
+    # Only remove tasks absent from every watched queue. Never drop live
+    # checkpoints or a failed-send entry merely to satisfy the capacity cap.
+    stale = state.keys() - snapshot.keys()
+    if stale:
+        state = {task: digest for task, digest in state.items()
+                 if task in snapshot}
+        write_state(path, state)
     sent = 0
     for task, status in sorted(snapshot.items()):
         digest = fingerprint(status)

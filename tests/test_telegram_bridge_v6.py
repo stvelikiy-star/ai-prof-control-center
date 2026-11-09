@@ -51,6 +51,37 @@ class DurableWatcherTests(unittest.TestCase):
                 v6.notify_once(Client(), path=self.path)
         self.assertFalse(self.path.exists())
 
+    def test_stale_checkpoints_pruned_without_sending(self):
+        stale = "KOL_TRAVEL_PLATFORM_20260101T000000Z_AAAAAA"
+        v6.write_state(self.path, {
+            TASK: v6.fingerprint(KOL), stale: v6.fingerprint(KOL)
+        })
+        client = Client()
+        self.assertEqual(v6.notify_once(client, path=self.path,
+                                        snapshot={TASK: KOL}), 0)
+        self.assertEqual(set(v6.read_state(self.path)), {TASK})
+        self.assertEqual(client.messages, [])
+
+    def test_reappearing_task_is_announced_after_pruning(self):
+        stale = "KOL_TRAVEL_PLATFORM_20260101T000000Z_AAAAAA"
+        v6.write_state(self.path, {
+            TASK: v6.fingerprint(KOL), stale: v6.fingerprint(KOL)
+        })
+        v6.notify_once(Client(), path=self.path, snapshot={TASK: KOL})
+        client = Client()
+        self.assertEqual(v6.notify_once(client, path=self.path,
+                         snapshot={TASK: KOL, stale: KOL}), 1)
+        self.assertIn(stale, client.messages[0])
+
+    def test_oversize_live_snapshot_fails_without_modification(self):
+        with patch.object(v6, "MAX_NOTIFIED_TASKS", 1):
+            with self.assertRaises(v6.DeliveryStateError):
+                v6.notify_once(Client(), path=self.path, snapshot={
+                    TASK: KOL,
+                    "KOL_TRAVEL_PLATFORM_20260101T000000Z_AAAAAA": KOL,
+                })
+        self.assertFalse(self.path.exists())
+
     def test_bootstrap_does_not_spam_historical_tasks(self):
         cl=Client()
         self.assertEqual(v6.notify_once(cl,path=self.path,snapshot={TASK:KOL}),0)
