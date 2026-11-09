@@ -59,6 +59,11 @@ def handle_update_v5(update, config, client) -> None:
     return _ORIGINAL_EXTENDED(update, config, client)
 
 def main() -> int:
+    # V6 replaces only the volatile V2 notification thread. Keeping this
+    # entrypoint preserves the installed systemd unit and all owner-only
+    # inbound command routing without changing privileged service config.
+    from telegram_bridge_v6 import watch_task_changes_v6
+    v2.watch_task_changes = watch_task_changes_v6
     v2.extended_handle_update = handle_update_v5
     v2.task_change_messages = task_change_messages_v5
     return v4.main()
