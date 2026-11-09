@@ -51,6 +51,20 @@ class DurableWatcherTests(unittest.TestCase):
                 v6.notify_once(Client(), path=self.path)
         self.assertFalse(self.path.exists())
 
+    def test_ledger_size_gate_prevents_corruption(self):
+        v6.write_state(self.path, {TASK: v6.fingerprint(KOL)})
+        original = self.path.read_bytes()
+        with patch.object(v6, "MAX_STATE_BYTES", len(original) - 1):
+            with self.assertRaises(v6.DeliveryStateError):
+                v6.write_state(self.path, {TASK: v6.fingerprint(KOL)})
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_ledger_size_limit_applies_on_bootstrap(self):
+        with patch.object(v6, "MAX_STATE_BYTES", 20):
+            with self.assertRaises(v6.DeliveryStateError):
+                v6.notify_once(Client(), path=self.path, snapshot={TASK: KOL})
+        self.assertFalse(self.path.exists())
+
     def test_stale_checkpoints_pruned_without_sending(self):
         stale = "KOL_TRAVEL_PLATFORM_20260101T000000Z_AAAAAA"
         v6.write_state(self.path, {

@@ -56,13 +56,17 @@ def read_state(path: Path) -> dict[str, str] | None:
 def write_state(path: Path, tasks: dict[str, str]) -> None:
     if path.is_symlink() or len(tasks) > MAX_NOTIFIED_TASKS:
         raise DeliveryStateError("unsafe notification-state destination")
+    payload = json.dumps(
+        {"version": 1, "tasks": dict(sorted(tasks.items()))},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8") + b"\n"
+    if len(payload) > MAX_STATE_BYTES:
+        raise DeliveryStateError("notification state exceeds size limit")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(prefix=".telegram-v6-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump({"version": 1, "tasks": dict(sorted(tasks.items()))},
-                      output, sort_keys=True, separators=(",", ":"))
-            output.write("\n")
+        with os.fdopen(fd, "wb") as output:
+            output.write(payload)
             output.flush()
             os.fsync(output.fileno())
         os.chmod(name, 0o600)
