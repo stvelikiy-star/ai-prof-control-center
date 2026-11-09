@@ -112,6 +112,13 @@ def main() -> int:
     # entrypoint preserves the installed systemd unit and all owner-only
     # inbound command routing without changing privileged service config.
     from telegram_bridge_v6 import watch_task_changes_v6
+    from telegram_ru import localize
+    # Translation only at delivery: all legacy command handlers and V6 task
+    # notifications preserve their existing authorization and checkpointing.
+    old_send = legacy.TelegramClient.send
+    def send_in_russian(client, message):
+        return old_send(client, legacy._telegram_truncate(localize(message)))
+    legacy.TelegramClient.send = send_in_russian
     v2.watch_task_changes = watch_task_changes_v6
     v2.extended_handle_update = handle_update_v5
     v2.task_change_messages = task_change_messages_v5
