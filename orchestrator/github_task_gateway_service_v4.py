@@ -25,6 +25,24 @@ def process_kol_v4_issue(issue: dict, issues_state: dict) -> bool:
     if isinstance(existing, dict):
         if existing.get("task_id"):
             _mark_v4_record(existing)
+            task_id = existing["task_id"]
+            state, _reason = gateway.task_public_state(task_id)
+            if state == "not found":
+                # Fail closed: the gateway remembered an imported task but its
+                # queue artifact no longer exists. Never create a duplicate.
+                if existing.get("status") == "orphaned":
+                    return False
+                gateway.post_comment(
+                    number,
+                    "AI PROF: нарушение целостности очереди. Ранее принятое "
+                    f"задание {gateway.sanitize(task_id, 160)} отсутствует. "
+                    "Автоматическое повторное создание запрещено. "
+                    "Проверьте историю и восстановление очереди.",
+                )
+                existing["status"] = "orphaned"
+                existing["last_reported_state"] = "not found"
+                existing["last_reported_reason"] = ""
+                return True
             return gateway.report_task_state(number, existing)
         return False
 
