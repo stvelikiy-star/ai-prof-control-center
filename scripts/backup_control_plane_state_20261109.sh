@@ -17,6 +17,10 @@ trap cleanup EXIT
  { echo "CONTROL_PLANE_STATE_MISSING"; exit 10; }
 [ ! -L "$STATE" ] && [ ! -L "$STATE/queue" ] || { echo "UNSAFE_STATE_PATH"; exit 11; }
 install -d -m 0700 "$BACKUPS" "$KEY_DIR"
+# Shared by manual and systemd runs. Never permit overlapping snapshots.
+LOCK="$BACKUPS/.control-plane-backup.lock"
+exec 9>"$LOCK"
+flock -n 9 || { echo "CONTROL_PLANE_BACKUP_ALREADY_RUNNING"; exit 19; }
 if [ ! -f "$KEY" ]; then
   (umask 077; head -c 48 /dev/urandom | base64 -w0 > "$KEY")
 fi
@@ -49,6 +53,11 @@ gpg --batch --quiet --no-tty --pinentry-mode loopback --passphrase-file "$KEY" \
 SOURCE_TASKS="$(find "$STATE/queue" -type f -name '*.md' | wc -l)"
 RESTORED_TASKS="$(find "$RESTORE_TMP/queue" -type f -name '*.md' | wc -l)"
 [ "$SOURCE_TASKS" = "$RESTORED_TASKS" ] || { echo "QUEUE_COUNT_MISMATCH"; exit 18; }
+# The live queue may change while tar is created. Count alone is not enough:
+# compare every name and byte; fail closed rather than accept a torn snapshot.
+if ! diff --recursive --brief --no-dereference -- "$STATE/queue" "$RESTORE_TMP/queue" >/dev/null; then
+  echo "QUEUE_CONTENT_MISMATCH"; exit 20
+fi
 chmod 0600 "$OUT_TMP"
 mv -- "$OUT_TMP" "$FINAL"
 OUT_TMP=""

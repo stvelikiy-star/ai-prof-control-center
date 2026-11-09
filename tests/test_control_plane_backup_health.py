@@ -13,7 +13,7 @@ class ControlPlaneBackupHealthTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.dir=Path(self.tmp.name)
         self.key=self.dir/"key"
-        self.key.write_text("dummy not used for decryption")
+        self.key.write_text("dummy passphrase length at least thirty-two")
         self.key.chmod(0o600)
         self.file=self.dir/"control-plane-20261109T080918Z.tar.gz.gpg"
         self.file.write_bytes(b"encrypted test fixture")
@@ -22,6 +22,12 @@ class ControlPlaneBackupHealthTests(unittest.TestCase):
         os.utime(self.file,(100000,100000))
     def test_success(self):
         self.assertEqual(h.evaluate(self.dir,self.key,now=100050)[0],"PASS")
+    def test_empty_key_is_critical(self):
+        self.key.write_text("")
+        self.assertEqual(h.evaluate(self.dir,self.key,now=100050)[0],"CRITICAL")
+    def test_empty_archive_is_critical(self):
+        self.file.write_bytes(b"")
+        self.assertEqual(h.evaluate(self.dir,self.key,now=100050)[0],"CRITICAL")
     def test_portable_manifest(self):
         digest=hashlib.sha256(self.file.read_bytes()).hexdigest()
         (self.dir/(self.file.name+".sha256")).write_text(digest+"  "+self.file.name+"\n")

@@ -15,8 +15,13 @@ NAME = re.compile(r"control-plane-\d{8}T\d{6}Z\.tar\.gz\.gpg")
 
 def evaluate(directory: Path = BACKUPS, key: Path = KEY, now: float | None = None) -> tuple[str, str]:
     current = time.time() if now is None else now
-    if not key.is_file() or key.is_symlink() or (key.stat().st_mode & 0o777) != 0o600:
-        return "CRITICAL", "recovery key missing or permissions unsafe"
+    try:
+        if (not key.is_file() or key.is_symlink()
+                or (key.stat().st_mode & 0o777) != 0o600
+                or key.stat().st_size < 32):
+            return "CRITICAL", "recovery key missing, empty or permissions unsafe"
+    except OSError:
+        return "CRITICAL", "recovery key inaccessible"
     try:
         files = [p for p in directory.iterdir() if NAME.fullmatch(p.name) and
                  p.is_file() and not p.is_symlink()]
@@ -24,11 +29,16 @@ def evaluate(directory: Path = BACKUPS, key: Path = KEY, now: float | None = Non
         return "CRITICAL", "control-plane backups unavailable"
     if not files:
         return "CRITICAL", "no encrypted control-plane snapshots"
-    latest = max(files, key=lambda p: p.stat().st_mtime)
-    age_hours = max(0, (current - latest.stat().st_mtime) / 3600)
-    checksum = latest.with_name(latest.name + ".sha256")
-    if checksum.is_symlink() or not checksum.is_file():
-        return "CRITICAL", "snapshot checksum unavailable"
+    try:
+        latest = max(files, key=lambda p: p.stat().st_mtime)
+        if latest.stat().st_size == 0:
+            return "CRITICAL", "encrypted snapshot is empty"
+        age_hours = max(0, (current - latest.stat().st_mtime) / 3600)
+        checksum = latest.with_name(latest.name + ".sha256")
+        if checksum.is_symlink() or not checksum.is_file():
+            return "CRITICAL", "snapshot checksum unavailable"
+    except OSError:
+        return "CRITICAL", "encrypted snapshot metadata unreadable"
     try:
         text = checksum.read_text(encoding="ascii").strip()
         digest, filename = text.split(maxsplit=1)
