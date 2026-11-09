@@ -30,6 +30,27 @@ class DurableWatcherTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path=Path(self.tmp.name)/"delivery.json"
 
+    def test_disabled_projects_never_enter_default_notification_snapshot(self):
+        disabled = ("approved", "resort-os", "")
+        unknown = ("completed", "unknown", "")
+        task2 = "RESORT_OS_20261109T070000Z_AABBCC"
+        task3 = "UNKNOWN_20261109T070001Z_AABBCC"
+        with patch.object(v6.v2, "_projects", return_value={
+            "kol-travel-platform": {"enabled": True},
+            "resort-os": {"enabled": False},
+        }), patch.object(v6.v2, "task_state_snapshot", return_value={
+            TASK: KOL, task2: disabled, task3: unknown
+        }):
+            self.assertEqual(v6.enabled_task_snapshot(), {TASK: KOL})
+            self.assertEqual(v6.notify_once(Client(), path=self.path), 0)
+            self.assertEqual(set(v6.read_state(self.path)), {TASK})
+
+    def test_missing_registry_fails_closed(self):
+        with patch.object(v6.v2, "_projects", return_value={}):
+            with self.assertRaises(v6.DeliveryStateError):
+                v6.notify_once(Client(), path=self.path)
+        self.assertFalse(self.path.exists())
+
     def test_bootstrap_does_not_spam_historical_tasks(self):
         cl=Client()
         self.assertEqual(v6.notify_once(cl,path=self.path,snapshot={TASK:KOL}),0)

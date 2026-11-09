@@ -72,11 +72,29 @@ def write_state(path: Path, tasks: dict[str, str]) -> None:
             os.unlink(name)
 
 
+def enabled_task_snapshot() -> dict[str, tuple[str, str, str]]:
+    """Never notify about disabled or unregistered client projects.
+
+    A missing registry fails closed instead of silently widening the scope.
+    """
+    projects = v2._projects()
+    enabled = {
+        project_id for project_id, config in projects.items()
+        if isinstance(config, dict) and config.get("enabled") is not False
+    }
+    if not enabled:
+        raise DeliveryStateError("no enabled projects in registry")
+    return {
+        task_id: status for task_id, status in v2.task_state_snapshot().items()
+        if status[1] in enabled
+    }
+
+
 def notify_once(client: legacy.TelegramClient, *, path: Path = STATE_PATH,
                 snapshot: dict[str, tuple[str, str, str]] | None = None) -> int:
     """Only checkpoint successful sends; failed sends retry on next poll."""
     if snapshot is None:
-        snapshot = v2.task_state_snapshot()
+        snapshot = enabled_task_snapshot()
     state = read_state(path)
     if state is None:
         # Baseline at first activation: do not flood the owner with months
