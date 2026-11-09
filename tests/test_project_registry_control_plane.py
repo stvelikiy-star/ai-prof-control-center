@@ -59,6 +59,20 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         with self.assertRaises(project_registry.ProjectPolicyError):
             project_registry.project_for_task(ROOT, project["path"])
 
+    def test_active_project_scope_only_kol_and_control_center(self):
+        enabled = {
+            project["project_id"] for project in self.projects
+            if project.get("enabled", True)
+        }
+        self.assertEqual(
+            enabled,
+            {"kol-travel-platform", "ai-prof-control-center"},
+        )
+        for project in self.projects:
+            if project["project_id"] not in enabled:
+                with self.subTest(project=project["project_id"]):
+                    self.assertIs(project["enabled"], False)
+
     def test_kol_registry_matches_current_checkout_shape(self):
         project = self.by_id["kol-travel-platform"]
         self.assertEqual(project["path"], "/home/agent/Загрузки/kol-travel-platform")

@@ -4,6 +4,7 @@
     {
       "project_id": "ai-prof-pilot",
       "path": "/home/agent/projects/ai-prof-pilot-runtime",
+      "enabled": false,
       "base_branch": "develop",
       "work_prefixes": [
         "feature/",
@@ -97,7 +98,7 @@
     {
       "project_id": "ak-bermet",
       "path": "/home/agent/projects/ak-bermet",
-      "enabled": true,
+      "enabled": false,
       "base_branch": "main",
       "allowed_base_branches": [
         "main",
@@ -224,7 +225,7 @@
     {
       "project_id": "ak-bermet-pilot",
       "path": "/home/agent/projects/ak-bermet-agent-pilot",
-      "enabled": true,
+      "enabled": false,
       "base_branch": "develop",
       "work_prefixes": [
         "feature/",

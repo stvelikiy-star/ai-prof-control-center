@@ -43,6 +43,7 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertEqual(projects["ai-prof-pilot"], {
             "project_id": "ai-prof-pilot",
             "path": "/home/agent/projects/ai-prof-pilot-runtime",
+            "enabled": False,
             "base_branch": "develop",
             "work_prefixes": ["feature/", "fix/"],
             "allowed_scope": ["README.md", "docs/**", "tests/**"],
