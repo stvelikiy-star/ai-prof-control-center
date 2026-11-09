@@ -9,6 +9,7 @@ re-fetches the owner-authored source issue before any commit or push.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import PurePosixPath
 
 import approved_task_publisher as publisher
@@ -154,10 +155,66 @@ def _process_task_with_target_gate(paths, task) -> int:
     return _ORIGINAL_PROCESS_TASK(paths, task)
 
 
+def _process_one_owner_aware(paths) -> int:
+    """Only V4 owner-authorized KÖL tasks may enter publication.
+
+    Generic approved code tasks have no publication authority. Treat these
+    as owner-review, not a failing publisher loop. Partial V4 metadata is
+    still rejected fail-closed by _validate_v4_authority.
+    """
+    authorized = []
+    awaiting_owner = 0
+    for task in sorted(paths.approved.glob("*.md")):
+        try:
+            if task.is_symlink() or not task.is_file():
+                raise publisher.PublisherError("approved task must be a regular file")
+            task_text = task.read_text(encoding="utf-8", errors="strict")
+            if publisher.field(task_text, "Project-Path") != str(publisher.KOL_PROJECT):
+                continue
+            metadata = (
+                "Publication-Contract-Version", "Publication-Action",
+                "Publication-Source-Issue", "Publication-Repository",
+                "Publication-Contract-Digest", "Publication-Allowed-Actions",
+                "Publication-Forbidden-Actions",
+            )
+            if not any(publisher.field(task_text, key) for key in metadata):
+                awaiting_owner += 1
+                continue
+            authorized.append(task)
+        except (OSError, UnicodeError, publisher.PublisherError) as exc:
+            publisher.write_log(
+                paths, task.stem, "APPROVED_TASK_PUBLISHER_BLOCKED\n"
+                + f"{type(exc).__name__}: {publisher.redact(exc)}",
+            )
+            print("APPROVED_TASK_PUBLISHER_BLOCKED", file=sys.stderr)
+            return 1
+    if len(authorized) > 1:
+        print("APPROVED_TASK_PUBLISHER_BLOCKED: ambiguous V4 tasks", file=sys.stderr)
+        return 1
+    if authorized:
+        task = authorized[0]
+        try:
+            return publisher.process_task(paths, task)
+        except Exception as exc:
+            publisher.write_log(
+                paths, task.stem, "APPROVED_TASK_PUBLISHER_BLOCKED\n"
+                + f"{type(exc).__name__}: {publisher.redact(exc)}",
+            )
+            print(f"APPROVED_TASK_PUBLISHER_BLOCKED: {publisher.redact(exc)}",
+                  file=sys.stderr)
+            return 1
+    if awaiting_owner:
+        print(f"APPROVED_TASK_PUBLISHER_OWNER_ACTION_REQUIRED count={awaiting_owner}")
+        return 0
+    print("APPROVED_TASK_PUBLISHER_IDLE")
+    return 0
+
+
 def main() -> int:
     publisher.commit_approved_change = _commit_or_resume
     publisher.process_task = _process_task_with_target_gate
     publisher.path_in_scope = _v4_path_in_scope
+    publisher.process_one = _process_one_owner_aware
     result = publisher.main()
     # control_loop treats child rc=1 as a normal task result. Publishing is a
     # repository-state gate, so any publisher failure must halt the cycle.
