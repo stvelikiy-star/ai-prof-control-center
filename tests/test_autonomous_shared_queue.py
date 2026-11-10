@@ -53,8 +53,33 @@ def owner_issue_attention(number=502):
     return issue
 
 
+def owner_issue_real_queue(number=505):
+    issue = owner_issue(number)
+    payload = json.loads(issue["body"][len(intake.MARKER):])
+    settings = intake.PROFILES[intake.PROFILE_REAL_QUEUE]
+    payload.update({
+        "profile": intake.PROFILE_REAL_QUEUE,
+        "pilot_repository": settings["repository"],
+        "pilot_issue": settings["pilot_issue"],
+        "pilot_body_sha256": settings["pilot_sha256"],
+    })
+    issue["title"] = intake.PREFIX + "Control Center queue snapshot via Codex"
+    issue["body"] = intake.MARKER + json.dumps(payload, sort_keys=True)
+    return issue
+
+
 class MainQueueIntakeTests(unittest.TestCase):
     def setUp(self):
+        # The worker changes pilot executor module globals per approved profile.
+        # Restore them after every fixture so the full suite is order-independent.
+        names = ("REPO", "BASE", "SCOPE", "ISSUE", "DIR", "STATE", "LOCK",
+                 "BRANCH", "MARKER", "EXPECTED_TITLE", "EXPECTED_BODY_SHA256",
+                 "INDEPENDENT_CHECKS", "PROMPT_SUFFIX")
+        original = {key: getattr(worker.core, key) for key in names}
+        def restore_executor():
+            for key, value in original.items():
+                setattr(worker.core, key, value)
+        self.addCleanup(restore_executor)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         p = mock.patch.object(intake, "QUEUE_ROOT", Path(self.temp.name))
@@ -92,6 +117,74 @@ class MainQueueIntakeTests(unittest.TestCase):
         tampered["body"] = tampered["body"].replace("draft-pr-only", "merge-and-deploy")
         with self.assertRaises(intake.AutoIntakeError):
             intake.validate_contract(tampered)
+
+    def test_real_project_owner_exact_contract_and_private_queue(self):
+        issue = owner_issue_real_queue()
+        verified = intake.validate_contract(issue)
+        self.assertEqual(verified["pilot_repository"], "stvelikiy-star/ai-prof-control-center")
+        self.assertEqual(verified["pilot_issue"], 216)
+        self.assertEqual(verified["profile"], intake.PROFILE_REAL_QUEUE)
+        state = {}
+        self.assertTrue(intake.process(issue, state))
+        self.assertEqual(state["505"]["status"], "autonomous_queued")
+        saved = intake.queue_path("autonomous_pending", 505)
+        self.assertEqual(json.loads(saved.read_text()), verified)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+
+    def test_real_project_forbidden_repo_and_digest_and_scope_change(self):
+        for key, changed in (("pilot_repository", "stvelikiy-star/resort-os"),
+                             ("pilot_body_sha256", "0"*64),
+                             ("action", "merge")):
+            issue = owner_issue_real_queue()
+            payload = json.loads(issue["body"][len(intake.MARKER):])
+            payload[key] = changed
+            issue["body"] = intake.MARKER + json.dumps(payload)
+            with self.subTest(key=key), self.assertRaises(intake.AutoIntakeError):
+                intake.validate_contract(issue)
+
+    def test_real_project_configuration_pins_repo_branch_scope(self):
+        record = intake.validate_contract(owner_issue_real_queue())
+        worker.configure(record)
+        self.assertEqual(worker.core.REPO, "stvelikiy-star/ai-prof-control-center")
+        self.assertEqual(worker.core.BASE, "feature/ai-prof-attention-profile-20261110")
+        self.assertEqual(worker.core.SCOPE, frozenset({
+            "orchestrator/autonomous_queue_snapshot.py",
+            "tests/test_autonomous_queue_snapshot.py",
+        }))
+        self.assertEqual(worker.core.ISSUE, 216)
+        self.assertEqual(worker.core.EXPECTED_BODY_SHA256,
+                         intake.PROFILES[intake.PROFILE_REAL_QUEUE]["pilot_sha256"])
+        self.assertEqual(worker.core.INDEPENDENT_CHECKS, worker.INDEPENDENT_REAL_QUEUE)
+
+    def test_real_project_source_issue_validates_exact_branch_and_scope(self):
+        record = intake.validate_contract(owner_issue_real_queue())
+        worker.configure(record)
+        cfg = intake.PROFILES[intake.PROFILE_REAL_QUEUE]
+        body = (cfg["pilot_marker"] + "\n"
+                "Scope-Files: orchestrator/autonomous_queue_snapshot.py, tests/test_autonomous_queue_snapshot.py\n"
+                "Base-Branch: feature/ai-prof-attention-profile-20261110\n")
+        with mock.patch.object(worker.core, "EXPECTED_BODY_SHA256", None):
+            source = {"number":216,"state":"open","user":{"login":"stvelikiy-star"},
+                      "title":cfg["pilot_title"],"body":body}
+            self.assertEqual(worker.core.validate_issue(source), body)
+            source["body"] = body.replace("feature/ai-prof-attention-profile-20261110", "main")
+            with self.assertRaises(worker.core.PilotError):
+                worker.core.validate_issue(source)
+            source["body"] = body.replace("tests/test_autonomous_queue_snapshot.py", "tests/test_unsafe.py")
+            with self.assertRaises(worker.core.PilotError):
+                worker.core.validate_issue(source)
+
+    def test_real_project_source_record_must_match_immutable_registry(self):
+        issue = owner_issue_real_queue()
+        record = intake.validate_contract(issue)
+        path = intake.queue_path("autonomous_pending", 505)
+        intake._create_new(path, record)
+        tampered = dict(record, pilot_repository="stvelikiy-star/resort-os")
+        path.write_text(json.dumps(tampered))
+        with mock.patch.object(worker, "get_issue") as get_issue:
+            with self.assertRaises(worker.ConsumerError):
+                worker.check_job(path)
+            get_issue.assert_not_called()
 
     def test_duplicate_pilot_issue_across_different_main_issues_is_blocked(self):
         state = {}
