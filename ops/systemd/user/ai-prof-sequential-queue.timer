@@ -1,0 +1,11 @@
+[Unit]
+Description=AI PROF durable sequential queue, one step per minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=10s
+Persistent=false
+Unit=ai-prof-sequential-queue.service
+
+[Install]
+WantedBy=timers.target
