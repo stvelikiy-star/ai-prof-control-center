@@ -1,0 +1,11 @@
+[Unit]
+Description=AI PROF shared autonomous queue, one reviewed job per tick
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=10s
+Persistent=false
+Unit=ai-prof-autonomous-shared-queue.service
+
+[Install]
+WantedBy=timers.target

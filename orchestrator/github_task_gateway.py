@@ -303,14 +303,21 @@ def run_gh(args: list[str], *, timeout: int = 30) -> Any:
     gh = shutil.which("gh")
     if not gh:
         raise GatewayError("GitHub CLI is unavailable")
-    result = subprocess.run(
-        [gh, *args],
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-        env={**os.environ, "GH_PROMPT_DISABLED": "1"},
-    )
+    try:
+        result = subprocess.run(
+            [gh, *args],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env={**os.environ, "GH_PROMPT_DISABLED": "1"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A temporary GitHub/network stall must not crash the long-lived
+        # gateway or erase durable intake state. Retry at the next poll.
+        raise GatewayError("GitHub API request timed out; retry next poll") from exc
+    except OSError as exc:
+        raise GatewayError("GitHub CLI process could not start") from exc
     if result.returncode != 0:
         raise GatewayError(
             "GitHub API request failed: "

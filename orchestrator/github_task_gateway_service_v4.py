@@ -10,6 +10,7 @@ from __future__ import annotations
 import github_task_gateway as gateway
 import github_task_gateway_service as established
 import kol_publication_contract_v4 as kol_v4
+import gateway_autonomous_intake as autonomous
 import submit_task as submit
 
 
@@ -92,6 +93,8 @@ def install_runtime_adapters() -> None:
     prior_process_issue = gateway.process_issue
 
     def process_issue(issue: dict, issues_state: dict) -> bool:
+        if autonomous.is_autonomous(issue):
+            return autonomous.process(issue, issues_state)
         if kol_v4.is_v4_issue(issue):
             return process_kol_v4_issue(issue, issues_state)
         return prior_process_issue(issue, issues_state)

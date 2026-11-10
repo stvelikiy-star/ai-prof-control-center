@@ -24,6 +24,9 @@ MARKER = "AI-PROF-PILOT-E2E-V1"
 EXPECTED_TITLE = "[AI-PROF-PILOT] Add task health summary"
 BASE = "main"
 EXPECTED_BODY_SHA256 = None
+# Optional fixed-authority outer gateway approval. In the autonomous lane,
+# verify the main issue is still open and unchanged before any publication.
+PRE_PUBLISH_CHECK = None
 INDEPENDENT_CHECKS = (
     "from scripts.task_health import summarize_task\n"
     "assert summarize_task({'task_id':'a','checks':[{'name':'a','status':'PASS'}]})=='ГОТОВО'\n"
@@ -168,6 +171,8 @@ def finalize() -> dict:
     if changed_files() != paths:
         raise PilotError("Unstable file set")
     validate_issue(github(f"repos/{REPO}/issues/{ISSUE}"))
+    if PRE_PUBLISH_CHECK is not None:
+        PRE_PUBLISH_CHECK()
     git("add", "--", *sorted(paths))
     staged = set(git("diff", "--cached", "--name-only").splitlines())
     if staged != paths:
@@ -177,10 +182,14 @@ def finalize() -> dict:
     commit = git("rev-parse", "HEAD")
     record("pushing", commit=commit)
     validate_issue(github(f"repos/{REPO}/issues/{ISSUE}"))
+    if PRE_PUBLISH_CHECK is not None:
+        PRE_PUBLISH_CHECK()
     git("push", "-u", "origin", f"refs/heads/{BRANCH}:refs/heads/{BRANCH}", timeout=90)
     remote = git("ls-remote", "origin", "refs/heads/" + BRANCH).split()[0]
     if remote != commit:
         raise PilotError("Remote commit SHA mismatch")
+    if PRE_PUBLISH_CHECK is not None:
+        PRE_PUBLISH_CHECK()
     pr_payload = run(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls",
         "-f", f"title=AI PROF autonomous pilot: {EXPECTED_TITLE}",
         "-f", f"head={BRANCH}", "-f", "base=main", "-F", "draft=true",
