@@ -330,6 +330,24 @@ class QueueConsumerTests(unittest.TestCase):
             run.assert_not_called()
             self.assertTrue(path.exists())
 
+    def test_other_project_codex_deferred_without_queue_mutation(self):
+        path, _ = self.setup_job()
+        with mock.patch("sequential_job_dispatcher.resource_gate", return_value=(True, "PASS")), \
+             mock.patch.object(worker, "safe_codex_launch_gate", return_value=(False, "OTHER_CODEX_ACTIVE")), \
+             mock.patch.object(worker, "run_pilot_process") as codex:
+            self.assertEqual(worker.tick(), "RESOURCE_DEFERRED_OTHER_CODEX_ACTIVE")
+            codex.assert_not_called()
+            self.assertTrue(path.exists())
+
+    def test_swap_pressure_deferred_without_queue_mutation(self):
+        path, _ = self.setup_job()
+        with mock.patch("sequential_job_dispatcher.resource_gate", return_value=(True, "PASS")), \
+             mock.patch.object(worker, "safe_codex_launch_gate", return_value=(False, "SWAP_MEMORY_PRESSURE")), \
+             mock.patch.object(worker, "run_pilot_process") as codex:
+            self.assertEqual(worker.tick(), "RESOURCE_DEFERRED_SWAP_MEMORY_PRESSURE")
+            codex.assert_not_called()
+            self.assertTrue(path.exists())
+
     def test_one_task_at_a_time(self):
         self.setup_job(500)
         self.setup_job(501)

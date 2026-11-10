@@ -288,6 +288,44 @@ def worker_once(number: int) -> int:
         core.PRE_PUBLISH_CHECK = None
 
 
+def safe_codex_launch_gate(proc_root: Path = Path("/proc")) -> tuple[bool, str]:
+    """Defer, never interrupt, if another Codex exec or memory pressure exists.
+
+    Only inspect executable names and argument tokens; never log command text.
+    Unknown /proc or PSI is a fail-closed defer for *new* tasks only.
+    """
+    import swap_pressure_gate as pressure
+    try:
+        values = {}
+        for line in (proc_root / "meminfo").read_text(encoding="ascii").splitlines():
+            if line.startswith(("SwapTotal:", "SwapFree:", "MemTotal:", "MemAvailable:")):
+                key, raw = line.split(":", 1)
+                values[key] = int(raw.split()[0])
+        total, free = values["SwapTotal"], values["SwapFree"]
+        mem_total, mem_available = values["MemTotal"], values["MemAvailable"]
+        if total < 0 or not 0 <= free <= total or mem_total <= 0 or not 0 <= mem_available <= mem_total:
+            return False, "INVALID_MEMORY_METRICS"
+        swap_pct = round(100 * (total - free) / total) if total else 0
+        ram_pct = round(100 * mem_available / mem_total)
+        psi = pressure.psi_some_avg60(proc_root / "pressure/memory")
+        if pressure.severity(swap_pct, ram_pct, psi) == "CRITICAL":
+            return False, "SWAP_MEMORY_PRESSURE"
+        for entry in proc_root.iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                argv = (entry / "cmdline").read_bytes().split(b"\0")
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue  # short-lived or inaccessible OS process
+            if not argv or not argv[0]:
+                continue
+            if Path(argv[0].decode("utf-8", "replace")).name in ("codex", "codex-linux") and b"exec" in argv[1:]:
+                return False, "OTHER_CODEX_ACTIVE"
+        return True, "EXTERNAL_AGENTS_AND_PRESSURE_PASS"
+    except (OSError, KeyError, ValueError, UnicodeError):
+        return False, "EXTERNAL_RESOURCE_UNVERIFIED"
+
+
 def tick() -> str:
     root = intake.QUEUE_ROOT
     active = sorted((root / "autonomous_active").glob("*.json"))
@@ -318,6 +356,9 @@ def tick() -> str:
     import sequential_job_dispatcher as baseline
     okay, reason = baseline.resource_gate()
     if not okay:
+        return "RESOURCE_DEFERRED_" + reason
+    allowed, reason = safe_codex_launch_gate()
+    if not allowed:
         return "RESOURCE_DEFERRED_" + reason
     try:
         data = check_job(path)
