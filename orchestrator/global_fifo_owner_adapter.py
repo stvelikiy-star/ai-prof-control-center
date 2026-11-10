@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import time
 
 import autonomous_shared_queue_worker as worker
 import gateway_autonomous_intake as intake
@@ -50,6 +51,9 @@ def pending_contract(task_id: str, *, legacy_root: Path = intake.QUEUE_ROOT) -> 
         if len(locations) != 1 or locations[0][0] != 'autonomous_pending':
             raise OwnerBridgeError('task not uniquely pending')
         _, path = locations[0]
+        age_seconds = time.time() - path.stat().st_mtime
+        if age_seconds < -60 or age_seconds > 14400:
+            raise OwnerBridgeError('legacy pending task expired or timestamp invalid')
         data = worker.check_job(path)
         if (data.get('main_issue') != number
                 or data.get('kind') != intake.RECORD_MARKER

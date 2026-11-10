@@ -10,8 +10,8 @@ The adapter accepts only an exact `AI_PROF_AUTO_MAIN_<positive issue number>` id
 
 ## Verified
 
-- 19 targeted adapter tests PASS, covering owner impersonation, closed and altered issue, fake SHA, changed pilot issue, replayed completed/blocked/active tasks, duplicates, symlinks, unavailable GitHub and live destination rejection.
-- Full local regression 732/732 PASS; syntax and diff checks PASS.
+- 21 targeted adapter tests PASS, covering owner impersonation, stale or future-dated pending entries, closed and altered issue, fake SHA, changed pilot issue, replayed completed/blocked/active tasks, duplicates, symlinks, unavailable GitHub and live destination rejection.
+- Full local regression 734/734 PASS; syntax and diff checks PASS.
 - Direct read-only Ubuntu evidence: historical completed autonomous Issue #218 and #215 correctly rejected as ineligible for migration.
 - No real GitHub task submitted, no Codex executed, no live FIFO tickets, no client projects changed.
 

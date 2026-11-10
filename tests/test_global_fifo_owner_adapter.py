@@ -1,6 +1,8 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
+import time
 import sys
 import tempfile
 import unittest
@@ -86,6 +88,19 @@ class OwnerAdapterTests(unittest.TestCase):
         saved=json.loads(self.path('autonomous_pending').read_text())
         saved['pilot_sha256']='0'*64
         self.path('autonomous_pending').write_text(json.dumps(saved))
+        with self.assertRaises(bridge.OwnerBridgeError):self.stage()
+
+    def test_stale_pending_task_cannot_reset_deadline(self):
+        path = self.path('autonomous_pending')
+        old = time.time() - 14401
+        os.utime(path, (old, old))
+        with self.assertRaises(bridge.OwnerBridgeError):self.stage()
+        self.assertFalse(self.fifo.exists())
+
+    def test_future_pending_timestamp_cannot_bypass_age(self):
+        path = self.path('autonomous_pending')
+        future = time.time() + 180
+        os.utime(path, (future, future))
         with self.assertRaises(bridge.OwnerBridgeError):self.stage()
 
     def test_completed_task_cannot_be_replayed(self):
