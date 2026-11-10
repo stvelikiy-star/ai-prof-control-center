@@ -66,7 +66,7 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         }
         self.assertEqual(
             enabled,
-            {"kol-travel-platform", "ai-prof-control-center"},
+            {"kol-travel-platform", "kol-v4-pr", "ai-prof-control-center"},
         )
         for project in self.projects:
             if project["project_id"] not in enabled:

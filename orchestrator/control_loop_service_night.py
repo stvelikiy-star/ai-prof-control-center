@@ -39,7 +39,7 @@ except ImportError:  # Direct script execution from orchestrator/.
     import control_loop_service as base  # type: ignore[no-redef]
 
 MAINTENANCE_PROJECT_PATH = "/home/agent/projects/ai-prof-control-center-maintenance"
-KOL_PROJECT_PATH = "/home/agent/Загрузки/kol-travel-platform"
+KOL_PROJECT_PATH = "/home/agent/projects/kol-ai-prof-pr-clone"
 IN_FLIGHT_QUEUES = ("active", "review", "pending_codex", "approved")
 KOL_V4_QUEUES = ("pending", "active", "review", "pending_codex", "approved")
 AK_BERMET_PUBLISHER_STAGES = {

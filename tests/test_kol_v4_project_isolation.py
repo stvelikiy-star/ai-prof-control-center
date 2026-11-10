@@ -17,7 +17,7 @@ import control_loop_service_night as night
 V4_TASK = "\n".join(
     [
         "Task-ID: KOL_TRAVEL_PLATFORM_20260830T142940Z_C13938",
-        "Project-Path: /home/agent/Загрузки/kol-travel-platform",
+        f"Project-Path: {night.KOL_PROJECT_PATH}",
         "Publication-Contract-Version: 4",
         "Work-Branch: feature/chatgpt-issue-172",
     ]

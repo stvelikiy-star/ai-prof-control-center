@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
 DEFAULT_STATE_ROOT = Path("/home/agent/.local/state/ai-prof-control-center")
-KOL_PROJECT = Path("/home/agent/Загрузки/kol-travel-platform")
+KOL_PROJECT = Path("/home/agent/projects/kol-ai-prof-pr-clone")
 KOL_REPOSITORY = "stvelikiy-star/kol-travel-platform"
 CONTROL_REPOSITORY = "stvelikiy-star/ai-prof-control-center"
 KOL_BASE_BRANCH = "main"

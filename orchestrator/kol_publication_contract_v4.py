@@ -18,7 +18,8 @@ import submit_task as submit
 
 VERSION = 4
 PROJECT = "kol-travel-platform"
-PROJECT_PATH = Path("/home/agent/Загрузки/kol-travel-platform")
+EXECUTION_PROJECT = "kol-v4-pr"
+PROJECT_PATH = Path("/home/agent/projects/kol-ai-prof-pr-clone")
 REPOSITORY = "stvelikiy-star/kol-travel-platform"
 TITLE_PREFIX = "[AI-PROF-KOL-TASK] "
 BODY_MARKER = "AI-PROF-KOL-TASK-V4\n"
@@ -231,8 +232,8 @@ def render_task(
 
 
 def submit_contract(number: int, contract: dict[str, Any]) -> dict[str, str]:
-    projects = submit.read_registry(gateway.ROOT, selected_project=PROJECT)
-    project = projects.get(PROJECT)
+    projects = submit.read_registry(gateway.ROOT, selected_project=EXECUTION_PROJECT)
+    project = projects.get(EXECUTION_PROJECT)
     if not isinstance(project, dict):
         raise KolV4Error("KÖL project registry entry is unavailable")
     if Path(project["path"]) != PROJECT_PATH:

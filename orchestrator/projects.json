@@ -317,6 +317,62 @@
       "code_toolchain": "nvm-node"
     },
     {
+      "project_id": "kol-v4-pr",
+      "path": "/home/agent/projects/kol-ai-prof-pr-clone",
+      "enabled": true,
+      "base_branch": "main",
+      "allowed_base_branches": [
+        "main"
+      ],
+      "work_prefixes": [
+        "feature/",
+        "fix/"
+      ],
+      "allowed_scope": [
+        "docs/**",
+        "scripts/**"
+      ],
+      "forbidden_scope": [
+        "**/.env",
+        "**/.env.local",
+        ".env",
+        ".env.local",
+        ".git/**",
+        ".github/workflows/**",
+        ".next/**",
+        "README.md",
+        "credentials",
+        "node_modules/**",
+        "package-lock.json",
+        "package.json",
+        "secrets",
+        "src/**",
+        "supabase/**",
+        "supabase/.temp/**"
+      ],
+      "agent_context": "agents/kol",
+      "allow_commits": false,
+      "allow_push": false,
+      "allow_merge": false,
+      "allow_deployment": false,
+      "require_clean_repository": true,
+      "max_scope_files": 20,
+      "code_required_commands": [
+        "git",
+        "python3",
+        "node",
+        "npm",
+        "npx"
+      ],
+      "code_required_checks": [
+        "npm run lint",
+        "npx tsc --noEmit --incremental false",
+        "npm run check:release-source",
+        "npm run build"
+      ],
+      "code_toolchain": "nvm-node"
+    },
+    {
       "project_id": "resort-os",
       "path": "/home/agent/projects/resort-os",
       "enabled": false,
