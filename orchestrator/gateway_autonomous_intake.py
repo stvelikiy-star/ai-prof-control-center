@@ -22,6 +22,7 @@ PILOT_REPOSITORY = "stvelikiy-star/ai-prof-autonomy-pilot"
 PILOT_ISSUE = 7
 PILOT_SHA256 = "52f85f6d83454bd8ca80aa4b0c58881dc0327c0369cd003154fb3f6bf05dd057"
 PROFILE_OVERVIEW = "pilot-task-overview-v1"
+PROFILE_ATTENTION = "pilot-task-attention-v1"
 PROFILES = {
     PROFILE: {
         "pilot_issue": PILOT_ISSUE,
@@ -34,6 +35,12 @@ PROFILES = {
         "pilot_sha256": "56914000f1de784b3df978f48f6a4a32a8954d3566c7f0f23669f440c968109a",
         "pilot_title": "[AI-PROF-PILOT] Add task overview from checks",
         "pilot_marker": "AI-PROF-PILOT-E2E-V5",
+    },
+    PROFILE_ATTENTION: {
+        "pilot_issue": 11,
+        "pilot_sha256": "ffbdabdc22825b2446453b1c13d3f94d736493510719f91355883693a39d64e3",
+        "pilot_title": "[AI-PROF-PILOT] Add deterministic attention summary",
+        "pilot_marker": "AI-PROF-PILOT-E2E-V6",
     },
 }
 QUEUE_ROOT = gateway.STATE_ROOT / "queue"
@@ -59,6 +66,7 @@ def validate_contract(issue: dict) -> dict:
     titles = {
         PROFILE: PREFIX + "Pilot task counts via Codex",
         PROFILE_OVERVIEW: PREFIX + "Pilot task overview via Codex",
+        PROFILE_ATTENTION: PREFIX + "Pilot task attention via Codex",
     }
     if issue.get("title") not in titles.values():
         raise AutoIntakeError("Unexpected autonomous issue title")

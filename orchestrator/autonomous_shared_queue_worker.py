@@ -57,6 +57,19 @@ else: raise AssertionError('invalid task accepted')
 """
 
 
+INDEPENDENT_ATTENTION = """from scripts.task_health import summarize_task_attention
+sample = lambda checks: {'task_id':'test','checks':checks}
+assert summarize_task_attention(sample([{'name':'a','status':'PASS'}])) == {'ready':True,'failed_count':0,'pending_count':0,'needs_attention':False}
+assert summarize_task_attention(sample([{'name':'a','status':'FAIL'}])) == {'ready':False,'failed_count':1,'pending_count':0,'needs_attention':True}
+assert summarize_task_attention(sample([{'name':'a','status':'PENDING'}])) == {'ready':False,'failed_count':0,'pending_count':1,'needs_attention':True}
+assert summarize_task_attention(sample([{'name':'a','status':'FAIL'},{'name':'b','status':'PENDING'}])) == {'ready':False,'failed_count':1,'pending_count':1,'needs_attention':True}
+assert summarize_task_attention(sample([])) == {'ready':False,'failed_count':0,'pending_count':0,'needs_attention':True}
+try: summarize_task_attention({'task_id':'','checks':[]})
+except ValueError: pass
+else: raise AssertionError('invalid task accepted')
+"""
+
+
 class ConsumerError(RuntimeError):
     pass
 
@@ -130,6 +143,9 @@ def configure(data: dict) -> None:
     elif data["profile"] == intake.PROFILE_OVERVIEW:
         core.INDEPENDENT_CHECKS = INDEPENDENT_OVERVIEW
         function_name = "summarize_task_overview"
+    elif data["profile"] == intake.PROFILE_ATTENTION:
+        core.INDEPENDENT_CHECKS = INDEPENDENT_ATTENTION
+        function_name = "summarize_task_attention"
     else:
         raise ConsumerError("Unapproved profile")
     core.PROMPT_SUFFIX = (

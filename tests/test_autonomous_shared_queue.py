@@ -41,6 +41,18 @@ def owner_issue_overview(number=501):
     return issue
 
 
+def owner_issue_attention(number=502):
+    issue = owner_issue(number)
+    payload = json.loads(issue["body"][len(intake.MARKER):])
+    settings = intake.PROFILES[intake.PROFILE_ATTENTION]
+    payload["profile"] = intake.PROFILE_ATTENTION
+    payload["pilot_issue"] = settings["pilot_issue"]
+    payload["pilot_body_sha256"] = settings["pilot_sha256"]
+    issue["title"] = intake.PREFIX + "Pilot task attention via Codex"
+    issue["body"] = intake.MARKER + json.dumps(payload, sort_keys=True)
+    return issue
+
+
 class MainQueueIntakeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -65,6 +77,21 @@ class MainQueueIntakeTests(unittest.TestCase):
         state = {}
         self.assertTrue(intake.process(owner_issue_overview(), state))
         self.assertEqual(state["501"]["status"], "autonomous_queued")
+
+    def test_third_distinct_attention_profile_accepted_with_exact_scope(self):
+        issue = owner_issue_attention()
+        record = intake.validate_contract(issue)
+        self.assertEqual(record["main_issue"], 502)
+        self.assertEqual(record["pilot_issue"], 11)
+        self.assertEqual(record["profile"], intake.PROFILE_ATTENTION)
+        state = {}
+        self.assertTrue(intake.process(issue, state))
+        self.assertEqual(state["502"]["status"], "autonomous_queued")
+        self.assertEqual(len(list(Path(self.temp.name).rglob("*.json"))), 1)
+        tampered = owner_issue_attention(504)
+        tampered["body"] = tampered["body"].replace("draft-pr-only", "merge-and-deploy")
+        with self.assertRaises(intake.AutoIntakeError):
+            intake.validate_contract(tampered)
 
     def test_duplicate_pilot_issue_across_different_main_issues_is_blocked(self):
         state = {}
