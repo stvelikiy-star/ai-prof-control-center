@@ -318,7 +318,7 @@
     },
     {
       "project_id": "kol-v4-pr",
-      "path": "/home/agent/projects/kol-ai-prof-pr-clone",
+      "path": "/home/agent/projects/kol-ai-prof-v4-runner",
       "enabled": true,
       "base_branch": "main",
       "allowed_base_branches": [

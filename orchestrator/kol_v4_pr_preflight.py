@@ -14,7 +14,7 @@ import sys
 ROOT = Path("/home/agent/projects/ai-prof-control-center")
 REGISTRY = ROOT / "orchestrator/projects.json"
 ORIGINAL = Path("/home/agent/Загрузки/kol-travel-platform")
-ISOLATED = Path("/home/agent/projects/kol-ai-prof-pr-clone")
+ISOLATED = Path("/home/agent/projects/kol-ai-prof-v4-runner")
 GATEWAY_MODULE = ROOT / "orchestrator/kol_publication_contract_v4.py"
 PUBLISHER_MODULE = ROOT / "orchestrator/approved_task_publisher.py"
 SERVER_UNIT = Path("/etc/systemd/system/ai-prof-control-center.service")
@@ -75,7 +75,10 @@ def checks(registry: Path = REGISTRY, *, original: Path = ORIGINAL,
     facts["original_branch"] = _git(original, "branch", "--show-current")
     facts["original_status"] = _git(original, "status", "--porcelain=v1")
     facts["isolated_sha"] = _git(isolated, "rev-parse", "HEAD")
+    facts["isolated_branch"] = _git(isolated, "branch", "--show-current")
     facts["isolated_status"] = _git(isolated, "status", "--porcelain=v1")
+    if facts["isolated_branch"] != "main":
+        reasons.append("PR-исполнитель должен находиться только на чистой ветке main")
     facts["isolated_git_metadata"] = (
         "directory" if (isolated / ".git").is_dir()
         else "worktree_pointer" if (isolated / ".git").is_file()
@@ -114,8 +117,8 @@ def checks(registry: Path = REGISTRY, *, original: Path = ORIGINAL,
     if facts["isolated_git_metadata"] != "directory":
         reasons.append("Текущий PR Publisher требует отдельный каталог .git")
     facts["isolated_origin"] = _git(isolated, "remote", "get-url", "origin")
-    if facts["isolated_origin"] != "https://github.com/stvelikiy-star/kol-travel-platform.git":
-        reasons.append("Origin изолированного Git-клона не закреплён за KÖL")
+    if facts["isolated_origin"] != "git@github.com:stvelikiy-star/kol-travel-platform.git":
+        reasons.append("Origin изолированного Git-клона должен быть доверенным KÖL SSH")
     facts["systemd_writable_checkout"] = _service_writable(isolated)
     if not facts["systemd_writable_checkout"]:
         reasons.append("Службе Control Center не разрешена запись в изолированный клон")

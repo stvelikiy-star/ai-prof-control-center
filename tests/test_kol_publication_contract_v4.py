@@ -93,6 +93,17 @@ def rendered_task(number: int = 200, task: dict | None = None) -> tuple[str, dic
 
 
 class KolPublicationContractV4Tests(unittest.TestCase):
+    def test_v4_submission_fails_closed_before_queue_when_preflight_blocked(self):
+        import kol_v4_pr_preflight
+
+        with mock.patch.object(
+            kol_v4_pr_preflight, "checks",
+            return_value={"ready": False, "reasons": ["main ещё не принял security PR"]},
+        ), mock.patch.object(v4.submit, "atomic_create") as atomic:
+            with self.assertRaisesRegex(v4.KolV4Error, "preflight blocked"):
+                v4.submit_contract(200, v4.parse_contract(issue()))
+            atomic.assert_not_called()
+
     def test_valid_v4_is_owner_bound_and_normalized(self):
         parsed = v4.parse_contract(issue())
         self.assertEqual(parsed["version"], 4)

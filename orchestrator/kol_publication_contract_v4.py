@@ -19,7 +19,7 @@ import submit_task as submit
 VERSION = 4
 PROJECT = "kol-travel-platform"
 EXECUTION_PROJECT = "kol-v4-pr"
-PROJECT_PATH = Path("/home/agent/projects/kol-ai-prof-pr-clone")
+PROJECT_PATH = Path("/home/agent/projects/kol-ai-prof-v4-runner")
 REPOSITORY = "stvelikiy-star/kol-travel-platform"
 TITLE_PREFIX = "[AI-PROF-KOL-TASK] "
 BODY_MARKER = "AI-PROF-KOL-TASK-V4\n"
@@ -232,6 +232,17 @@ def render_task(
 
 
 def submit_contract(number: int, contract: dict[str, Any]) -> dict[str, str]:
+    # Reject new owner tasks *before* creating any queue artifact unless the
+    # exact isolated main checkout, toolchain, security and service access pass.
+    # A public GitHub issue is not itself authority to bypass operational gates.
+    import kol_v4_pr_preflight
+
+    readiness = kol_v4_pr_preflight.checks()
+    if not readiness["ready"]:
+        raise KolV4Error(
+            "KÖL V4 execution preflight blocked: "
+            + "; ".join(readiness["reasons"][:8])
+        )
     projects = submit.read_registry(gateway.ROOT, selected_project=EXECUTION_PROJECT)
     project = projects.get(EXECUTION_PROJECT)
     if not isinstance(project, dict):

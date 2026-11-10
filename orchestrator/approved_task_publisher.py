@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
 DEFAULT_STATE_ROOT = Path("/home/agent/.local/state/ai-prof-control-center")
-KOL_PROJECT = Path("/home/agent/projects/kol-ai-prof-pr-clone")
+KOL_PROJECT = Path("/home/agent/projects/kol-ai-prof-v4-runner")
 KOL_REPOSITORY = "stvelikiy-star/kol-travel-platform"
 CONTROL_REPOSITORY = "stvelikiy-star/ai-prof-control-center"
 KOL_BASE_BRANCH = "main"
@@ -407,7 +407,7 @@ def process_one(paths: Paths) -> int:
 def run_self_test() -> int:
     sample = "\n".join([
         "Task-ID: KOL_TRAVEL_PLATFORM_20260813T040625Z_14EB7E",
-        "Project-Path: /home/agent/Загрузки/kol-travel-platform", "Base-Branch: main",
+        f"Project-Path: {KOL_PROJECT}", "Base-Branch: main",
         "Work-Branch: feature/chatgpt-issue-50", "Goal: smoke",
         "Instructions: Source: authorized private GitHub task issue #50.",
         "Scope-Files: docs/a.md, src/lib/a.ts",
