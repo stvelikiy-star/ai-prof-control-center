@@ -94,9 +94,9 @@ def validate_issue(issue: dict) -> str:
     if not isinstance(body, str) or not body.startswith(MARKER + "\n"):
         raise PilotError("Invalid issue contract marker")
     lines = body.splitlines()
-    if "Scope-Files: scripts/task_health.py, tests/test_task_health.py" not in lines:
+    if "Scope-Files: " + ", ".join(sorted(SCOPE)) not in lines:
         raise PilotError("Unexpected scope")
-    if "Base-Branch: main" not in lines:
+    if "Base-Branch: " + BASE not in lines:
         raise PilotError("Unexpected branch")
     if EXPECTED_BODY_SHA256 is not None:
         import hashlib
@@ -114,8 +114,8 @@ def validate_checkout() -> None:
         raise PilotError("Expected clean untouched develop branch")
     if git("status", "--porcelain=v1"):
         raise PilotError("Pilot checkout is dirty")
-    remote_main = git("ls-remote", "origin", "refs/heads/main").split()[0]
-    if remote_main != git("rev-parse", "main") or git("rev-parse", "HEAD") != remote_main:
+    remote_main = git("ls-remote", "origin", "refs/heads/" + BASE).split()[0]
+    if remote_main != git("rev-parse", BASE) or git("rev-parse", "HEAD") != remote_main:
         raise PilotError("Main SHA mismatch")
     probe = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", "refs/heads/" + BRANCH],
@@ -159,7 +159,7 @@ def execute() -> dict:
 
 def finalize() -> dict:
     paths = changed_files()
-    if not paths or not {"scripts/task_health.py", "tests/test_task_health.py"}.issubset(paths):
+    if not paths or paths != set(SCOPE):
         raise PilotError("Codex did not edit required scoped source and tests")
     record("testing", files=sorted(paths))
     test = run(["python3", "-B", "-m", "unittest", "discover",
@@ -192,7 +192,7 @@ def finalize() -> dict:
         PRE_PUBLISH_CHECK()
     pr_payload = run(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls",
         "-f", f"title=AI PROF autonomous pilot: {EXPECTED_TITLE}",
-        "-f", f"head={BRANCH}", "-f", "base=main", "-F", "draft=true",
+        "-f", f"head={BRANCH}", "-f", f"base={BASE}", "-F", "draft=true",
         "-f", f"body=Automated bounded AI PROF pilot from owner issue #{ISSUE}. "
               "Codex implementation and independent Python checks PASS. "
               "Only two approved files changed. No merge or deployment."],

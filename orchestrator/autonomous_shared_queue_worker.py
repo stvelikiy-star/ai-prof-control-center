@@ -70,6 +70,23 @@ else: raise AssertionError('invalid task accepted')
 """
 
 
+INDEPENDENT_REAL_QUEUE = """import tempfile
+from pathlib import Path
+from orchestrator.autonomous_queue_snapshot import summarize_queue
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory)
+    zeros={'pending':0,'active':0,'completed':0,'blocked':0}
+    assert summarize_queue(root)==zeros
+    (root/'autonomous_pending').mkdir()
+    (root/'autonomous_pending'/'first.json').write_text('{}')
+    assert summarize_queue(root)=={**zeros,'pending':1}
+    (root/'autonomous_active').symlink_to(root/'autonomous_pending',target_is_directory=True)
+    try: summarize_queue(root)
+    except (ValueError,OSError): pass
+    else: raise AssertionError('symlink directory not rejected')
+"""
+
+
 class ConsumerError(RuntimeError):
     pass
 
@@ -95,7 +112,7 @@ def check_job(path: Path) -> dict:
             or data.get("version") != 1
             or data.get("kind") != intake.RECORD_MARKER
             or profile_cfg is None
-            or data.get("pilot_repository") != intake.PILOT_REPOSITORY
+            or data.get("pilot_repository") != profile_cfg.get("repository", intake.PILOT_REPOSITORY)
             or data.get("pilot_issue") != profile_cfg["pilot_issue"]
             or data.get("pilot_sha256") != profile_cfg["pilot_sha256"]
             or data.get("deadline_seconds") != 14400
@@ -109,7 +126,7 @@ def check_job(path: Path) -> dict:
     trusted = intake.validate_contract(main)
     if trusted != data:
         raise ConsumerError("GitHub main issue no longer matches approved contract")
-    pilot = get_issue(intake.PILOT_REPOSITORY, data["pilot_issue"])
+    pilot = get_issue(data["pilot_repository"], data["pilot_issue"])
     if (pilot.get("user", {}).get("login") != "stvelikiy-star"
             or pilot.get("state") != "open"
             or pilot.get("title") != profile_cfg["pilot_title"]
@@ -134,6 +151,9 @@ def configure(data: dict) -> None:
     core.STATE = gateway.STATE_ROOT / "reports" / f"autonomous-main-{identifier}-pilot-{pilot_number}.json"
     core.LOCK = gateway.STATE_ROOT / "run" / f"autonomous-main-{identifier}-pilot-{pilot_number}.lock"
     core.BRANCH = f"feature/ai-prof-auto-main-{identifier}-pilot-{pilot_number}"
+    core.REPO = settings.get("repository", intake.PILOT_REPOSITORY)
+    core.BASE = settings.get("base_branch", "main")
+    core.SCOPE = frozenset(settings.get("scope", ("scripts/task_health.py", "tests/test_task_health.py")))
     core.MARKER = settings["pilot_marker"]
     core.EXPECTED_TITLE = settings["pilot_title"]
     core.EXPECTED_BODY_SHA256 = settings["pilot_sha256"]
@@ -146,8 +166,21 @@ def configure(data: dict) -> None:
     elif data["profile"] == intake.PROFILE_ATTENTION:
         core.INDEPENDENT_CHECKS = INDEPENDENT_ATTENTION
         function_name = "summarize_task_attention"
+    elif data["profile"] == intake.PROFILE_REAL_QUEUE:
+        core.INDEPENDENT_CHECKS = INDEPENDENT_REAL_QUEUE
+        function_name = "summarize_queue"
     else:
         raise ConsumerError("Unapproved profile")
+    if data["profile"] == intake.PROFILE_REAL_QUEUE:
+        core.PROMPT_SUFFIX = (
+            "You may ONLY add or edit orchestrator/autonomous_queue_snapshot.py "
+            "and tests/test_autonomous_queue_snapshot.py; implement summarize_queue(root) "
+            "as a read-only deterministic scanner of four autonomous queue folders, "
+            "reject symlinks and malformed filesystem entries, add at least eight tests. "
+            "Do not touch secrets, network, state, services, production, "
+            "commit, push, merge or deploy. Run Python unittest tests."
+        )
+        return
     core.PROMPT_SUFFIX = (
         "Only modify scripts/task_health.py and tests/test_task_health.py. "
         f"Implement {function_name} using evaluate_task. Add at least six "
@@ -161,20 +194,21 @@ def prepare_checkout(data: dict) -> None:
     target = core.DIR
     if not target.exists():
         subprocess.run(
-            ["git", "clone", "--branch", "main",
-             "git@github.com:stvelikiy-star/ai-prof-autonomy-pilot.git",
+            ["git", "clone", "--branch", core.BASE,
+             "git@github.com:" + core.REPO + ".git",
              str(target)],
             capture_output=True, text=True, timeout=90, check=True,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
-        core.git("switch", "-c", "develop", "main")
+        core.git("switch", "-c", "develop", core.BASE)
     if not (target / ".git").is_dir() or target.is_symlink():
         raise ConsumerError("Unsafe clone")
-    if (core.git("rev-parse", "HEAD") != PILOT_SHA
+    baseline_sha = intake.PROFILES[data["profile"]].get("base_sha", PILOT_SHA)
+    if (core.git("rev-parse", "HEAD") != baseline_sha
             or core.git("branch", "--show-current") != "develop"
             or core.git("status", "--porcelain=v1")
             or core.git("remote", "get-url", "origin") !=
-            "git@github.com:stvelikiy-star/ai-prof-autonomy-pilot.git"):
+            "git@github.com:" + core.REPO + ".git"):
         raise ConsumerError("Checkout fails baseline verification")
 
 
@@ -192,18 +226,18 @@ def verify_published(data: dict) -> bool:
                 or not isinstance(number, int) or number <= 0
                 or not isinstance(commit, str) or len(commit) != 40
                 or state.get("pull_request") !=
-                f"https://github.com/{intake.PILOT_REPOSITORY}/pull/{number}"):
+                f"https://github.com/{data['pilot_repository']}/pull/{number}"):
             return False
         result = gateway.run_gh([
             "api", "-X", "GET",
-            f"repos/{intake.PILOT_REPOSITORY}/pulls/{number}"], timeout=40)
+            f"repos/{data['pilot_repository']}/pulls/{number}"], timeout=40)
         files = gateway.run_gh([
             "api", "-X", "GET",
-            f"repos/{intake.PILOT_REPOSITORY}/pulls/{number}/files"], timeout=40)
+            f"repos/{data['pilot_repository']}/pulls/{number}/files"], timeout=40)
         return (
             result.get("state") == "open" and result.get("draft") is True
             and result.get("merged") is False
-            and result.get("base", {}).get("ref") == "main"
+            and result.get("base", {}).get("ref") == core.BASE
             and result.get("head", {}).get("sha") == commit
             and result.get("head", {}).get("ref") == core.BRANCH
             and isinstance(files, list) and len(files) == 2

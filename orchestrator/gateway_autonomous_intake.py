@@ -23,6 +23,7 @@ PILOT_ISSUE = 7
 PILOT_SHA256 = "52f85f6d83454bd8ca80aa4b0c58881dc0327c0369cd003154fb3f6bf05dd057"
 PROFILE_OVERVIEW = "pilot-task-overview-v1"
 PROFILE_ATTENTION = "pilot-task-attention-v1"
+PROFILE_REAL_QUEUE = "control-center-queue-snapshot-v1"
 PROFILES = {
     PROFILE: {
         "pilot_issue": PILOT_ISSUE,
@@ -41,6 +42,16 @@ PROFILES = {
         "pilot_sha256": "ffbdabdc22825b2446453b1c13d3f94d736493510719f91355883693a39d64e3",
         "pilot_title": "[AI-PROF-PILOT] Add deterministic attention summary",
         "pilot_marker": "AI-PROF-PILOT-E2E-V6",
+    },
+    PROFILE_REAL_QUEUE: {
+        "pilot_issue": 216,
+        "pilot_sha256": "ae8c1fee00529f6145fbf0d36014d7529a1bc1617b835aad464d182a7b7c466c",
+        "pilot_title": "[AI-PROF-REAL] Add read-only autonomous queue snapshot",
+        "pilot_marker": "AI-PROF-REAL-E2E-V1",
+        "repository": "stvelikiy-star/ai-prof-control-center",
+        "base_branch": "feature/ai-prof-attention-profile-20261110",
+        "base_sha": "946e8ffc0c0eb2697f5e01bdb999e820941a56d1",
+        "scope": ("orchestrator/autonomous_queue_snapshot.py", "tests/test_autonomous_queue_snapshot.py"),
     },
 }
 QUEUE_ROOT = gateway.STATE_ROOT / "queue"
@@ -67,6 +78,7 @@ def validate_contract(issue: dict) -> dict:
         PROFILE: PREFIX + "Pilot task counts via Codex",
         PROFILE_OVERVIEW: PREFIX + "Pilot task overview via Codex",
         PROFILE_ATTENTION: PREFIX + "Pilot task attention via Codex",
+        PROFILE_REAL_QUEUE: PREFIX + "Control Center queue snapshot via Codex",
     }
     if issue.get("title") not in titles.values():
         raise AutoIntakeError("Unexpected autonomous issue title")
@@ -83,7 +95,7 @@ def validate_contract(issue: dict) -> dict:
         raise AutoIntakeError("Profile not in fixed approved registry")
     expected = {
         "version": 1, "profile": profile,
-        "pilot_repository": PILOT_REPOSITORY,
+        "pilot_repository": settings.get("repository", PILOT_REPOSITORY),
         "pilot_issue": settings["pilot_issue"],
         "pilot_body_sha256": settings["pilot_sha256"],
         "action": "draft-pr-only",
@@ -93,7 +105,7 @@ def validate_contract(issue: dict) -> dict:
     return {
         "version": 1, "kind": RECORD_MARKER, "main_issue": number,
         "profile": profile, "pilot_issue": settings["pilot_issue"],
-        "pilot_repository": PILOT_REPOSITORY,
+        "pilot_repository": settings.get("repository", PILOT_REPOSITORY),
         "pilot_sha256": settings["pilot_sha256"],
         "owner_issue_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "deadline_seconds": 4 * 3600,
