@@ -1,31 +1,26 @@
-# AI PROF CENTER — second autonomous profile acceptance, 2026-11-10
+# AI PROF CENTER — two consecutive autonomous issue executions, 2026-11-10
 
-## Confirmed real execution
+## Real end-to-end PASS
 
-- Main owner GitHub issue #214 imported by restarted Gateway (2026-11-10 23:38:23 +06).
-- Pilot source issue #9, profile `pilot-task-overview-v1`; queue completed.
-- Draft PR #10 in `stvelikiy-star/ai-prof-autonomy-pilot`, commit `4aa931fbf196a206db9d67de11405b15a5c24fd3`.
-- Telegram message #590 delivered; gateway `result_reported=true`; repeated queue cycle IDLE.
+- The system GitHub Gateway was restarted on Ubuntu with current exact-contract profiles and remained active.
+- Main owner issue #214 uses distinct source pilot issue #9 and approved `pilot-task-overview-v1`. Its queued task completed first. GitHub Draft PR #10 is open, unmerged, base `main`, SHA `4aa931fbf196a206db9d67de11405b15a5c24fd3`. Telegram message #590 delivered.
+- Main owner issue #215 uses distinct source pilot issue #11 and approved `pilot-task-attention-v1`. Its task entered the queue only after #214 had completed, then completed. GitHub Draft PR #12 is open, unmerged, base `main`, SHA `a7a1440964a86843f797375268f141cb4dfc62c0`. Telegram message #591 delivered.
+- For each PR, live GitHub API confirmed exactly two changed files: `scripts/task_health.py`, `tests/test_task_health.py`; expected remote head SHA; draft=true; merged=false.
+- Queue artifacts #214 and #215 exist separately in `autonomous_completed`, and latest worker journal returned `AI_PROF_AUTO_LANE_IDLE` after #215. No merge or deployment.
+- Owner contract for source issue #11 was pinned with live GitHub body SHA256 `ffbdabdc22825b2446453b1c13d3f94d736493510719f91355883693a39d64e3`.
+- Full native regression after changes: 663/663 PASS. Focused queue/Gateway suite 47/47 PASS; `git diff --check` PASS.
 
-## Next distinct profile prepared (not activated)
+## Isolated crash / reconciliation PASS
 
-- Pilot owner source issue #11: `https://github.com/stvelikiy-star/ai-prof-autonomy-pilot/issues/11`.
-- Immutable SHA256 `ffbdabdc22825b2446453b1c13d3f94d736493510719f91355883693a39d64e3` confirmed by live GitHub API.
-- `pilot-task-attention-v1` added to exact owner/title/sha allowlist, dispatch with semantic independent assertions and regression test.
-- Focused suite 47 PASS, full suite 663 PASS; `git diff --check` clean.
-- Third profile NOT loaded by existing running Gateway; controlled Gateway restart must happen after this change is committed/reviewed. Do not submit another owner main issue before activation.
+- Two disposable child processes exited with code 78 after moving a synthetic queue entry to active.
+- With injected negative publication evidence, real queue `tick()` marked the entry blocked; with injected positive evidence, it marked the entry completed; neither re-ran Codex.
+- These are isolated state-integration crash tests with mocked remote evidence. A real remote PR-verification crash test remains a separate release gate.
 
-## Recovery check
+## Safety/release limitations
 
-- Separate disposable child process exits with code 78 after moving a synthetic entry to `autonomous_active`.
-- Isolated state recovery with injected evidence: absent -> blocked; present -> completed. Neither path repeats Codex. Two cases PASS.
-- This is not a production Codex process crash or a genuine remote GitHub verification in the recovery harness.
+- GitHub issues #212 and #213 are historical closed failed attempts; #212 blocked as a duplicate and #213 rejected by a previously stale Gateway process. Neither is a successful acceptance task.
+- Historical KOL V4 publication task is blocked due to missing explicit publication authority; no rights are added retroactively.
+- Execution is still constrained to exact pilot profiles and an isolated private repo; general project rollout and production approval are not established.
+- Off-host disaster recovery, extended burn-in and a multi-project permission audit remain unverified.
 
-## Pending release gates
-
-- Gateway reactivation for third profile, new owner main issue, second new Draft PR and Telegram report.
-- Two NEW issue tasks executed sequentially in a single acceptance campaign NOT YET PROVEN.
-- Independent off-host restore, prolonged burn-in and production readiness NOT YET PROVEN.
-- KOL V4 legacy publication remains intentionally blocked; never add publication rights retroactively.
-
-**FULL RELEASE NO-GO. No customer projects or production deployments changed.**
+**Accepted: TWO DISTINCT AUTONOMOUS PILOT TASKS E2E PASS. Full commercial/production launch: NO-GO until remaining release gates.**
