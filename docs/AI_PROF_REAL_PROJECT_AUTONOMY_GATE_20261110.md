@@ -25,7 +25,8 @@ Date: 2026-11-10 (Asia/Bishkek)
 
 - Targeted test suite: 52/52 PASS.
 - Cross-route pilot/real compatibility: 68/68 PASS.
-- Full repository regression: 668/668 PASS (after test fixture global-state isolation correction).
+- Full repository regression after isolated-host CI fixture fix: 669/669 PASS. Earlier 668/668 PASS prior to CI correction.
+- GitHub CI exposed a legacy KÖL preflight test assumption about a local Ubuntu-only `.git` directory; test now verifies both host-present and CI-absent cases fail closed. No production preflight policy changed.
 - `git diff --check` PASS.
 
 ## Current release gate

@@ -12,10 +12,25 @@ class KolPRPreflightTests(unittest.TestCase):
     def test_isolated_clone_is_registered_but_service_not_yet_authorized(self):
         result = preflight.checks()
         self.assertFalse(result["ready"])
-        self.assertEqual(result["facts"]["isolated_git_metadata"], "directory")
+        # CI has no live Ubuntu KÖL runner clone; it must fail closed rather
+        # than assume host-local .git metadata exists in the test environment.
+        actual = result["facts"]["isolated_git_metadata"]
+        if (preflight.ISOLATED / ".git").is_dir():
+            self.assertEqual(actual, "directory")
+        else:
+            self.assertEqual(actual, "missing")
+            self.assertTrue(any("каталог .git" in reason for reason in result["reasons"]))
         self.assertEqual(result["facts"]["registered_project_path"], str(preflight.ISOLATED))
         self.assertEqual(result["facts"]["registered_base_branch"], "main")
         self.assertTrue(any("служб" in item.lower() for item in result["reasons"]))
+
+    def test_missing_isolated_clone_must_remain_blocked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            absent = Path(temporary) / "never-created"
+            result = preflight.checks(isolated=absent)
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["facts"]["isolated_git_metadata"], "missing")
+            self.assertTrue(any("каталог .git" in reason for reason in result["reasons"]))
 
     def test_high_severity_audit_fails_closed_without_fixing_packages(self):
         class Result:
