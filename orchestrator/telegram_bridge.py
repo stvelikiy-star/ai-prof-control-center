@@ -240,11 +240,48 @@ def control_center_health(state_root: Path) -> str:
         return "degraded (invalid heartbeat)"
 
 
+def autonomous_queue_status(state_root: Path) -> str:
+    """Owner-only status line; bounded, metadata-only, no task body reads."""
+    root = state_root / "queue"
+    names = ("autonomous_pending", "autonomous_active",
+             "autonomous_completed", "autonomous_blocked")
+    counts = {}
+    try:
+        if root.is_symlink() or not root.is_dir():
+            return "Автономная очередь: недоступна"
+        for name in names:
+            directory = root / name
+            if directory.is_symlink():
+                return "Автономная очередь: недоступна"
+            if not directory.exists():
+                counts[name] = 0
+                continue
+            if not directory.is_dir():
+                return "Автономная очередь: недоступна"
+            entries = list(directory.iterdir())
+            if len(entries) > 1000:
+                return "Автономная очередь: недоступна"
+            if any(item.is_symlink() or not item.is_file()
+                   or not item.name.startswith("AI_PROF_AUTO_MAIN_")
+                   or not item.name.endswith(".json")
+                   for item in entries):
+                return "Автономная очередь: недоступна"
+            counts[name] = len(entries)
+    except (OSError, ValueError):
+        return "Автономная очередь: недоступна"
+    return ("Автономная очередь: "
+            f"ожидает {counts['autonomous_pending']}, "
+            f"в работе {counts['autonomous_active']}, "
+            f"завершено {counts['autonomous_completed']}, "
+            f"заблокировано {counts['autonomous_blocked']}")
+
+
 def status_message(state_root: Path, projects: dict[str, dict]) -> str:
     lines = [
         "AI PROF status",
         "Bridge: healthy (responding)",
         f"Control Center: {control_center_health(state_root)}",
+        autonomous_queue_status(state_root),
     ]
     tasks = recent_tasks(state_root, projects)
     if not tasks:

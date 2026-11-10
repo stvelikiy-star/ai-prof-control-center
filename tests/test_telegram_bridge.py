@@ -58,6 +58,41 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertIn("Push disabled: yes", message)
             self.assertIn("Deployment disabled: yes", message)
 
+    def test_owner_status_shows_autonomous_queue_counts_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for folder in ("autonomous_pending", "autonomous_active",
+                           "autonomous_completed", "autonomous_blocked"):
+                (root / "queue" / folder).mkdir(parents=True)
+            (root / "queue" / "autonomous_completed" / "AI_PROF_AUTO_MAIN_218.json").write_text(
+                '{"secret":"must-not-appear"}', encoding="utf-8")
+            status = bridge.status_message(root, {})
+            self.assertIn("ожидает 0, в работе 0, завершено 1, заблокировано 0", status)
+            self.assertNotIn("must-not-appear", status)
+            self.assertNotIn("218.json", status)
+
+    def test_missing_queue_does_not_claim_empty_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIn("Автономная очередь: недоступна",
+                          bridge.status_message(Path(temporary), {}))
+
+    def test_autonomous_queue_symlink_denied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "queue").mkdir()
+            (root / "queue" / "autonomous_completed").symlink_to(root)
+            self.assertEqual(bridge.autonomous_queue_status(root),
+                             "Автономная очередь: недоступна")
+
+    def test_autonomous_queue_bad_filename_denied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            d = root / "queue" / "autonomous_pending"
+            d.mkdir(parents=True)
+            (d / "rogue.json").write_text('{}')
+            self.assertEqual(bridge.autonomous_queue_status(root),
+                             "Автономная очередь: недоступна")
+
     def test_command_parsing_and_ordinary_messages(self):
         self.assertIsNone(bridge.parse_command("daily report complete"))
         self.assertEqual(bridge.parse_command("/ai help"), bridge.Command("help"))
