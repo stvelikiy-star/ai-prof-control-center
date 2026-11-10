@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gateway_autonomous_intake as intake
 import github_task_gateway as gateway
 import pilot_issue_e2e as core
+import global_agent_admission as admission
 
 RUN_LOCK = gateway.STATE_ROOT / "run" / "autonomous-shared-queue.lock"
 PILOT_ROOT = Path("/home/agent/projects")
@@ -256,12 +257,13 @@ def relocate(source: Path, target_queue: str) -> Path:
     return target
 
 
-def run_pilot_process(data: dict) -> int:
+def run_pilot_process(data: dict, *, lease_fd: int | None = None) -> int:
     worker = subprocess.Popen(
         ["/usr/bin/python3", str(Path(__file__).resolve()), "--worker",
          str(data["main_issue"])],
         start_new_session=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        pass_fds=(() if lease_fd is None else (lease_fd,)),
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
              "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1"},
     )
@@ -353,29 +355,36 @@ def tick() -> str:
     if int(time.time()) - int(path.stat().st_mtime) > 14400:
         relocate(path, "autonomous_blocked")
         return "EXPIRED_BLOCKED"
-    import sequential_job_dispatcher as baseline
-    okay, reason = baseline.resource_gate()
-    if not okay:
-        return "RESOURCE_DEFERRED_" + reason
-    allowed, reason = safe_codex_launch_gate()
-    if not allowed:
-        return "RESOURCE_DEFERRED_" + reason
     try:
-        data = check_job(path)
-    except (ConsumerError, gateway.GatewayError):
-        relocate(path, "autonomous_blocked")
-        return "INVALID_OWNER_CONTRACT_BLOCKED"
-    active_path = relocate(path, "autonomous_active")
-    try:
-        code = run_pilot_process(data)
-        if code == 0 and verify_published(data):
-            relocate(active_path, "autonomous_completed")
-            return "OWNER_ISSUE_COMPLETED_PR_TELEGRAM_PASS"
-        relocate(active_path, "autonomous_blocked")
-        return "WORKER_FAILED_BLOCKED"
-    except (ConsumerError, OSError, ValueError, subprocess.TimeoutExpired, gateway.GatewayError):
-        relocate(active_path, "autonomous_blocked")
-        return "WORKER_INTERRUPTED_BLOCKED"
+        lease = admission.acquire('ai-prof-control-center')
+    except admission.AdmissionError:
+        return "RESOURCE_DEFERRED_GLOBAL_ADMISSION_UNVERIFIED"
+    if lease is None:
+        return "RESOURCE_DEFERRED_GLOBAL_AGENT_BUSY"
+    with lease:
+        import sequential_job_dispatcher as baseline
+        okay, reason = baseline.resource_gate()
+        if not okay:
+            return "RESOURCE_DEFERRED_" + reason
+        allowed, reason = safe_codex_launch_gate()
+        if not allowed:
+            return "RESOURCE_DEFERRED_" + reason
+        try:
+            data = check_job(path)
+        except (ConsumerError, gateway.GatewayError):
+            relocate(path, "autonomous_blocked")
+            return "INVALID_OWNER_CONTRACT_BLOCKED"
+        active_path = relocate(path, "autonomous_active")
+        try:
+            code = run_pilot_process(data, lease_fd=lease.fd)
+            if code == 0 and verify_published(data):
+                relocate(active_path, "autonomous_completed")
+                return "OWNER_ISSUE_COMPLETED_PR_TELEGRAM_PASS"
+            relocate(active_path, "autonomous_blocked")
+            return "WORKER_FAILED_BLOCKED"
+        except (ConsumerError, OSError, ValueError, subprocess.TimeoutExpired, gateway.GatewayError):
+            relocate(active_path, "autonomous_blocked")
+            return "WORKER_INTERRUPTED_BLOCKED"
 
 
 def main() -> int:

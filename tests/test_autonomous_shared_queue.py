@@ -80,6 +80,12 @@ class MainQueueIntakeTests(unittest.TestCase):
             for key, value in original.items():
                 setattr(worker.core, key, value)
         self.addCleanup(restore_executor)
+        # Legacy tests describe queue transitions, not host-global admission.
+        # A separate suite exercises the real cross-process flock contract.
+        lease = mock.MagicMock(fd=17)
+        p_lease = mock.patch.object(worker.admission, "acquire", return_value=lease)
+        p_lease.start()
+        self.addCleanup(p_lease.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         p = mock.patch.object(intake, "QUEUE_ROOT", Path(self.temp.name))
@@ -348,6 +354,33 @@ class QueueConsumerTests(unittest.TestCase):
             self.assertEqual(worker.tick(), "RESOURCE_DEFERRED_SWAP_MEMORY_PRESSURE")
             codex.assert_not_called()
             self.assertTrue(path.exists())
+
+    def test_global_busy_defers_without_attempt_or_queue_change(self):
+        path, _ = self.setup_job()
+        with mock.patch.object(worker.admission, "acquire", return_value=None), \
+             mock.patch.object(worker, "run_pilot_process") as executor:
+            self.assertEqual(worker.tick(), "RESOURCE_DEFERRED_GLOBAL_AGENT_BUSY")
+            executor.assert_not_called()
+            self.assertTrue(path.exists())
+
+    def test_global_unavailable_defer_fails_closed(self):
+        path, _ = self.setup_job()
+        with mock.patch.object(worker.admission, "acquire", side_effect=worker.admission.AdmissionError('missing')):
+            self.assertEqual(worker.tick(), "RESOURCE_DEFERRED_GLOBAL_ADMISSION_UNVERIFIED")
+            self.assertTrue(path.exists())
+
+    def test_worker_inherits_held_global_lock_fd(self):
+        path, _ = self.setup_job()
+        lease = mock.MagicMock(fd=73)
+        with mock.patch.object(worker.admission, "acquire", return_value=lease), \
+             mock.patch("sequential_job_dispatcher.resource_gate", return_value=(True, "PASS")), \
+             mock.patch.object(worker, "safe_codex_launch_gate", return_value=(True, "PASS")), \
+             mock.patch.object(worker, "check_job", return_value=intake.validate_contract(owner_issue())), \
+             mock.patch.object(worker, "run_pilot_process", return_value=0) as runner, \
+             mock.patch.object(worker, "verify_published", return_value=True):
+            self.assertEqual(worker.tick(), "OWNER_ISSUE_COMPLETED_PR_TELEGRAM_PASS")
+            runner.assert_called_once_with(mock.ANY, lease_fd=73)
+            self.assertTrue(intake.queue_path('autonomous_completed', 500).is_file())
 
     def test_one_task_at_a_time(self):
         self.setup_job(500)
