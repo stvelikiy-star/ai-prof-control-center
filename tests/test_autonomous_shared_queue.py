@@ -316,7 +316,8 @@ class QueueConsumerTests(unittest.TestCase):
         with mock.patch.object(worker, "check_job", side_effect=worker.ConsumerError("bad")), \
              mock.patch.object(worker, "run_pilot_process") as run, \
              mock.patch("sequential_job_dispatcher.resource_gate",
-                        return_value=(True, "PASS")):
+                        return_value=(True, "PASS")), \
+             mock.patch.object(worker, "safe_codex_launch_gate", return_value=(True, "PASS")):
             self.assertEqual(worker.tick(), "INVALID_OWNER_CONTRACT_BLOCKED")
             run.assert_not_called()
             self.assertTrue(intake.queue_path("autonomous_blocked", 500).exists())
@@ -353,6 +354,7 @@ class QueueConsumerTests(unittest.TestCase):
         self.setup_job(501)
         with mock.patch("sequential_job_dispatcher.resource_gate",
                         return_value=(True, "ok")), \
+             mock.patch.object(worker, "safe_codex_launch_gate", return_value=(True, "PASS")), \
              mock.patch.object(worker, "check_job",
                                side_effect=lambda p: intake.validate_contract(owner_issue(int(p.stem.split("_")[-1])))), \
              mock.patch.object(worker, "run_pilot_process", return_value=0) as run, \
