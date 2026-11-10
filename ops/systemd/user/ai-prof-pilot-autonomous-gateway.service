@@ -1,0 +1,20 @@
+[Unit]
+Description=AI PROF private pilot issue 3 autonomous GitHub to Codex to draft PR gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/pilot_gateway_autonomous.py
+Environment=HOME=/home/agent
+Environment=USER=agent
+Environment=GH_CONFIG_DIR=/home/agent/.config/gh
+Environment=GH_PROMPT_DISABLED=1
+Environment=GIT_TERMINAL_PROMPT=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/home/agent/.local/bin:/home/agent/.nvm/versions/node/v24.18.0/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+PrivateTmp=false
+# Git SSH proxy on Ubuntu requires the host /tmp namespace.
+TimeoutStartSec=420s

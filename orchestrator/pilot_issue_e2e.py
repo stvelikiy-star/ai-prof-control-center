@@ -23,6 +23,13 @@ SCOPE = frozenset(("scripts/task_health.py", "tests/test_task_health.py"))
 MARKER = "AI-PROF-PILOT-E2E-V1"
 EXPECTED_TITLE = "[AI-PROF-PILOT] Add task health summary"
 BASE = "main"
+EXPECTED_BODY_SHA256 = None
+INDEPENDENT_CHECKS = (
+    "from scripts.task_health import summarize_task\n"
+    "assert summarize_task({'task_id':'a','checks':[{'name':'a','status':'PASS'}]})=='ГОТОВО'\n"
+    "assert summarize_task({'task_id':'a','checks':[]})=='ОЖИДАНИЕ: нет проверок'\n"
+    "assert summarize_task({'task_id':'a','checks':[{'name':'x','status':'FAIL'},{'name':'y','status':'PENDING'}]})=='ОШИБКИ: x; ОЖИДАНИЕ: y'\n"
+)
 CODEX = "/home/agent/.local/bin/codex"
 PROMPT_SUFFIX = (
     "Act only in this private AI PROF pilot checkout. Modify ONLY "
@@ -88,6 +95,10 @@ def validate_issue(issue: dict) -> str:
         raise PilotError("Unexpected scope")
     if "Base-Branch: main" not in lines:
         raise PilotError("Unexpected branch")
+    if EXPECTED_BODY_SHA256 is not None:
+        import hashlib
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() != EXPECTED_BODY_SHA256:
+            raise PilotError("Issue body contract digest mismatch")
     return body
 
 
@@ -153,30 +164,27 @@ def finalize() -> dict:
     if "Ran " not in test.stderr + test.stdout or "OK" not in test.stderr + test.stdout:
         raise PilotError("Independent test output invalid")
     # Independent semantic assertions beyond agent-authored tests.
-    verify = run(["python3", "-B", "-c",
-        "from scripts.task_health import summarize_task\n"
-        "assert summarize_task({'task_id':'a','checks':[{'name':'a','status':'PASS'}]})=='ГОТОВО'\n"
-        "assert summarize_task({'task_id':'a','checks':[]})=='ОЖИДАНИЕ: нет проверок'\n"
-        "assert summarize_task({'task_id':'a','checks':[{'name':'x','status':'FAIL'},{'name':'y','status':'PENDING'}]})=='ОШИБКИ: x; ОЖИДАНИЕ: y'\n"
-    ], cwd=DIR, timeout=20)
+    run(["python3", "-B", "-c", INDEPENDENT_CHECKS], cwd=DIR, timeout=20)
     if changed_files() != paths:
         raise PilotError("Unstable file set")
+    validate_issue(github(f"repos/{REPO}/issues/{ISSUE}"))
     git("add", "--", *sorted(paths))
     staged = set(git("diff", "--cached", "--name-only").splitlines())
     if staged != paths:
         raise PilotError("Staged scope mismatch")
     git("-c", "commit.gpgSign=false", "commit", "--no-gpg-sign", "-m",
-        "feat(pilot): implement GitHub issue 1 via Codex")
+        f"feat(pilot): implement GitHub issue {ISSUE} via Codex")
     commit = git("rev-parse", "HEAD")
     record("pushing", commit=commit)
+    validate_issue(github(f"repos/{REPO}/issues/{ISSUE}"))
     git("push", "-u", "origin", f"refs/heads/{BRANCH}:refs/heads/{BRANCH}", timeout=90)
     remote = git("ls-remote", "origin", "refs/heads/" + BRANCH).split()[0]
     if remote != commit:
         raise PilotError("Remote commit SHA mismatch")
     pr_payload = run(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls",
-        "-f", "title=AI PROF autonomous pilot: task summary from issue #1",
+        "-f", f"title=AI PROF autonomous pilot: {EXPECTED_TITLE}",
         "-f", f"head={BRANCH}", "-f", "base=main", "-F", "draft=true",
-        "-f", "body=Automated bounded AI PROF pilot from owner issue #1. "
+        "-f", f"body=Automated bounded AI PROF pilot from owner issue #{ISSUE}. "
               "Codex implementation and independent Python checks PASS. "
               "Only two approved files changed. No merge or deployment."],
         timeout=40).stdout
@@ -218,7 +226,8 @@ def notify_terminal_pass() -> int:
         print("PILOT_TELEGRAM_ALREADY_NOTIFIED")
         return 0
     url = data.get("pull_request")
-    if url != f"https://github.com/{REPO}/pull/2":
+    expected_prefix = f"https://github.com/{REPO}/pull/"
+    if not isinstance(url, str) or url != expected_prefix + str(data.get("pull_request_number")):
         raise PilotError("Unexpected PR URL in saved acceptance")
     import telegram_bridge as bridge
     cfg = bridge.load_config()
@@ -226,9 +235,9 @@ def notify_terminal_pass() -> int:
         "chat_id": cfg.chat_id,
         "text": (
             "🤖 AI PROF — полный тестовый цикл Github → Codex → проверка → PR завершён.\n"
-            "✅ GitHub issue №1 обработан.\n"
-            "✅ Codex создал код; независимые тесты 12/12 PASS.\n"
-            "✅ Draft PR №2 содержит ровно два разрешённых файла.\n"
+            f"✅ GitHub issue №{ISSUE} обработан.\n"
+            "✅ Codex создал код; независимые проверки PASS.\n"
+            f"✅ Draft PR №{data.get('pull_request_number')} содержит ровно два разрешённых файла.\n"
             f"PR: {url}\n"
             "🔒 Merge, production и KÖL не затронуты."
         ),
