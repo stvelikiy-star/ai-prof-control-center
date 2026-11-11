@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Fail-closed, commit-only publisher for AI PROF self-maintenance.
+"""Restricted AI PROF approved-task publisher.
 
-Slice 5A grants exactly one new capability: an approved AI PROF task may create
-one local commit on its exact work branch. Network publication, push, PR,
-merge, deployment, queue movement and completion remain outside this module.
-
-The branch ref is advanced atomically with an expected old SHA. A retry may
-only resume the exact single commit already produced for the same task, base
-SHA and scoped paths.
+Existing GitHub-issue V3 tasks remain strictly commit-only. Owner-authenticated
+Telegram V4 tasks may additionally publish one independently audited exact
+scoped commit as a Draft PR, then mark the task complete. No merge/deployment,
+no arbitrary project publication, and no general push capability is enabled.
 """
 from __future__ import annotations
 
@@ -27,6 +24,7 @@ BASE_BRANCH = "maintenance/base"
 AGENT_CONTEXT = "agents/ai-prof-control-center"
 SOURCE_REPOSITORY = "stvelikiy-star/ai-prof-control-center"
 WORK_BRANCH_RE = re.compile(r"(?:feature|fix)/chatgpt-issue-([1-9][0-9]*)\Z")
+TELEGRAM_BRANCH_RE = re.compile(r"feature/telegram-[0-9a-f]{8}-[0-9a-f]{12}\Z")
 TASK_ID_RE = re.compile(r"[A-Z0-9][A-Z0-9_-]{5,159}\Z")
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 MAX_METADATA_BYTES = 256 * 1024
@@ -65,32 +63,46 @@ class PublicationDecision:
     committed: bool = False
     published: bool = False
     complete: bool = False
+    pull_request: str | None = None
 
     def __post_init__(self) -> None:
-        if self.published or self.complete:
-            raise ValueError("Slice 5A cannot publish or complete a task")
         if self.decision not in {
-            "OWNER_ACTION_REQUIRED", "COMMIT_AUTHORIZED", "COMMITTED", "BLOCKED"
+            "OWNER_ACTION_REQUIRED", "COMMIT_AUTHORIZED", "COMMITTED", "PUBLISHED", "BLOCKED"
         }:
-            raise ValueError("unknown AI PROF commit decision")
-        if self.decision == "COMMITTED":
-            if not self.committed or not isinstance(self.commit_sha, str):
-                raise ValueError("COMMITTED requires an exact commit SHA")
-            if SHA_RE.fullmatch(self.commit_sha) is None:
-                raise ValueError("invalid commit SHA")
-        elif self.committed or self.commit_sha is not None:
-            raise ValueError("non-committed decision cannot carry a commit")
+            raise ValueError("unknown AI PROF publication decision")
+        if self.decision == "PUBLISHED":
+            if (not self.committed or not self.published or not self.complete
+                    or not isinstance(self.commit_sha, str)
+                    or SHA_RE.fullmatch(self.commit_sha) is None
+                    or not isinstance(self.pull_request, str)
+                    or re.fullmatch(r"https://github\.com/stvelikiy-star/ai-prof-control-center/pull/[1-9][0-9]*", self.pull_request) is None):
+                raise ValueError("PUBLISHED requires exact verified Draft PR")
+        elif self.decision == "COMMITTED":
+            if (not self.committed or not isinstance(self.commit_sha, str)
+                    or SHA_RE.fullmatch(self.commit_sha) is None
+                    or self.published or self.complete or self.pull_request is not None):
+                raise ValueError("COMMITTED requires local commit only")
+        elif (self.committed or self.commit_sha is not None
+              or self.published or self.complete or self.pull_request is not None):
+            raise ValueError("non-publication decision cannot claim a result")
+
 
 def _decision(decision: str, reason: str, task_id: object = None,
-              *, commit_sha: str | None = None) -> PublicationDecision:
+              *, commit_sha: str | None = None,
+              pull_request: str | None = None) -> PublicationDecision:
     safe_task = (
         task_id if isinstance(task_id, str) and TASK_ID_RE.fullmatch(task_id)
         else None
     )
     return PublicationDecision(
         decision=decision, reason=reason, task_id=safe_task,
-        commit_sha=commit_sha, committed=decision == "COMMITTED",
+        commit_sha=commit_sha,
+        committed=decision in ("COMMITTED", "PUBLISHED"),
+        published=decision == "PUBLISHED",
+        complete=decision == "PUBLISHED",
+        pull_request=pull_request,
     )
+
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
@@ -184,11 +196,18 @@ def _validate_task(task: Mapping[str, object]) -> tuple[str, str, tuple[str, ...
     _exact_string(task, "base_branch", BASE_BRANCH, "wrong_branch_identity")
     _exact_string(task, "agent_context", AGENT_CONTEXT, "wrong_profile_identity")
     work_branch = _required_string(task, "work_branch", "wrong_branch_identity")
-    match = WORK_BRANCH_RE.fullmatch(work_branch)
-    if match is None:
-        raise MetadataError("wrong_branch_identity")
-    if int(match.group(1)) != _source_issue(task):
-        raise MetadataError("wrong_source_identity")
+    source = _mapping(task.get("source"), "source")
+    if source.get("kind") == "telegram_owner":
+        if source != {"kind": "telegram_owner", "repository": SOURCE_REPOSITORY}:
+            raise MetadataError("wrong_source_identity")
+        if TELEGRAM_BRANCH_RE.fullmatch(work_branch) is None:
+            raise MetadataError("wrong_branch_identity")
+    else:
+        match = WORK_BRANCH_RE.fullmatch(work_branch)
+        if match is None:
+            raise MetadataError("wrong_branch_identity")
+        if int(match.group(1)) != _source_issue(task):
+            raise MetadataError("wrong_source_identity")
     return task_id, work_branch, _scope_files(task)
 
 def _validate_repository(repository: Mapping[str, object], work_branch: str,
@@ -351,6 +370,104 @@ def commit_approved_change(project: Path,
     _verify_exact_commit(project, authorization, commit_sha)
     return commit_sha
 
+
+def _publish_verified_owner_draft(project: Path, authorization: CommitAuthorization,
+                                  commit_sha: str) -> str:
+    """Only the exact audited AI PROF owner Telegram branch. No merge/deploy."""
+    if TELEGRAM_BRANCH_RE.fullmatch(authorization.work_branch) is None:
+        raise CommitBlocked("draft_pr_branch_not_authorized")
+    _verify_exact_commit(project, authorization, commit_sha)
+    # Non-forced push is safe on retries and fails on conflicting remote HEAD.
+    _run(["git", "push", "origin",
+          f"{commit_sha}:refs/heads/{authorization.work_branch}"], cwd=project)
+    pr_list = _run([
+        "gh", "pr", "list", "--repo", SOURCE_REPOSITORY,
+        "--head", authorization.work_branch, "--state", "all",
+        "--json", "url,headRefOid,isDraft,baseRefName,state",
+    ],cwd=project)
+    try:
+        candidates=json.loads(pr_list.stdout)
+    except (ValueError,TypeError) as exc:
+        raise CommitBlocked("draft_pr_lookup_invalid") from exc
+    if not isinstance(candidates,list) or len(candidates)>1:
+        raise CommitBlocked("draft_pr_lookup_ambiguous")
+    if candidates:
+        selected=candidates[0]
+        url=selected.get("url") if isinstance(selected,dict) else None
+    else:
+        created=_run([
+            "gh", "pr", "create", "--repo", SOURCE_REPOSITORY,
+            "--base", "main", "--head", authorization.work_branch, "--draft",
+            "--title", f"AI PROF technical task {authorization.task_id}",
+            "--body", ("Owner-approved Telegram technical task. "
+                       f"Task-ID: {authorization.task_id}\n"
+                       "Stage 01B execution: PASS. Independent Stage 01C audit: PASS.\n"
+                       "Merge and deployment are not authorized."),
+        ],cwd=project)
+        url=created.stdout.strip().splitlines()[-1] if created.stdout.strip() else None
+    if not isinstance(url,str) or re.fullmatch(
+        r"https://github\.com/stvelikiy-star/ai-prof-control-center/pull/[1-9][0-9]*",url
+    ) is None:
+        raise CommitBlocked("draft_pr_url_invalid")
+    verified=_run([
+        "gh", "pr", "view", url, "--repo", SOURCE_REPOSITORY,
+        "--json", "url,headRefOid,isDraft,baseRefName,state",
+    ],cwd=project)
+    try: evidence=json.loads(verified.stdout)
+    except (ValueError,TypeError) as exc:
+        raise CommitBlocked("draft_pr_remote_evidence_invalid") from exc
+    if (not isinstance(evidence,dict) or evidence.get("url")!=url
+        or evidence.get("headRefOid")!=commit_sha
+        or evidence.get("isDraft") is not True
+        or evidence.get("baseRefName")!="main"
+        or evidence.get("state")!="OPEN"):
+        raise CommitBlocked("draft_pr_remote_evidence_mismatch")
+    return url
+
+
+def _complete_owner_telegram_task(state_root: Path, task_id: str,
+                                  commit_sha: str, url: str) -> None:
+    """Move only the exact approved task into completed after remote PR proof."""
+    if TASK_ID_RE.fullmatch(task_id) is None:
+        raise CommitBlocked("invalid_completed_task_id")
+    old=state_root/"queue"/"approved"/f"{task_id}.md"
+    new=state_root/"queue"/"completed"/f"{task_id}.md"
+    if old.is_symlink() or new.is_symlink():
+        raise CommitBlocked("terminal_task_conflict")
+    try:
+        if old.stat().st_size>MAX_TASK_BYTES:
+            raise CommitBlocked("approved_task_too_large")
+        original=old.read_text(encoding="utf-8")
+        if _task_field(original,"Task-ID")!=task_id:
+            raise CommitBlocked("approved_task_changed")
+        if new.parent.is_symlink() or not new.parent.is_dir():
+            raise CommitBlocked("completed_queue_unavailable")
+        completed=original.rstrip("\n")+f"\nCommit-SHA: {commit_sha}\nDraft-PR: {url}\n"
+        # Crash-safe retry after link-before-unlink: verify exact bytes,
+        # then remove the already-finished source. Never replace results.
+        if new.exists():
+            if (not new.is_file() or new.stat().st_size>MAX_TASK_BYTES
+                    or new.read_text(encoding="utf-8") != completed):
+                raise CommitBlocked("terminal_task_conflict")
+            old.unlink()
+            return
+        import tempfile
+        fd,tmp=tempfile.mkstemp(prefix=".approved-finish-",dir=new.parent)
+        try:
+            with os.fdopen(fd,"w",encoding="utf-8") as handle:
+                handle.write(completed);handle.flush();os.fsync(handle.fileno())
+            os.chmod(tmp,0o600)
+            os.link(tmp,new)  # no replacement of an existing completed result
+        finally:
+            if os.path.exists(tmp):os.unlink(tmp)
+        old.unlink()
+        directory_fd=os.open(new.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory_fd)
+        finally:os.close(directory_fd)
+    except (OSError,UnicodeError,ValueError) as exc:
+        raise CommitBlocked("terminal_task_move_failed") from exc
+
+
 def _read_json_object(path: Path, boundary: Path) -> Mapping[str, object]:
     resolved_boundary = boundary.resolve(strict=True)
     if path.is_symlink():
@@ -433,18 +550,24 @@ def _read_approved_task(path: Path, approved_root: Path) -> Mapping[str, object]
     )
     if publication_action is None:
         return None
-    if publication_action != "commit":
+    if publication_action not in ("commit", "draft-pr"):
         raise MetadataError("unsupported_publication_action")
-    if _task_field(text, "Publication-Contract-Version") != "3":
+    expected_version = "3" if publication_action == "commit" else "4"
+    if _task_field(text, "Publication-Contract-Version") != expected_version:
         raise MetadataError("wrong_publication_contract")
     if _task_field(text, "Publication-Repository") != SOURCE_REPOSITORY:
         raise MetadataError("wrong_source_identity")
 
-    issue_text = _task_field(text, "Publication-Source-Issue")
-    assert issue_text is not None
-    if not issue_text.isascii() or not issue_text.isdigit() or int(issue_text) <= 0:
+    issue = None
+    if publication_action == "commit":
+        issue_text = _task_field(text, "Publication-Source-Issue")
+        assert issue_text is not None
+        if not issue_text.isascii() or not issue_text.isdigit() or int(issue_text) <= 0:
+            raise MetadataError("wrong_source_identity")
+        issue = int(issue_text)
+    elif (_task_field(text, "Publication-Source") != "telegram-owner"
+          or _task_field(text, "Publication-Source-Issue", required=False) is not None):
         raise MetadataError("wrong_source_identity")
-    issue = int(issue_text)
 
     task_id = _task_field(text, "Task-ID")
     assert task_id is not None
@@ -452,7 +575,10 @@ def _read_approved_task(path: Path, approved_root: Path) -> Mapping[str, object]
         raise MetadataError("ambiguous_task_identity")
     work_branch = _task_field(text, "Work-Branch")
     assert work_branch is not None
-    if work_branch != f"feature/chatgpt-issue-{issue}":
+    if publication_action == "commit":
+        if work_branch != f"feature/chatgpt-issue-{issue}":
+            raise MetadataError("wrong_branch_identity")
+    elif TELEGRAM_BRANCH_RE.fullmatch(work_branch) is None:
         raise MetadataError("wrong_branch_identity")
     if _task_field(text, "Execution-Mode") != "code":
         raise MetadataError("wrong_execution_mode")
@@ -474,11 +600,12 @@ def _read_approved_task(path: Path, approved_root: Path) -> Mapping[str, object]
         "work_branch": work_branch,
         "agent_context": AGENT_CONTEXT,
         "scope_files": list(_task_scope(text)),
-        "source": {
-            "kind": "github_issue",
-            "repository": SOURCE_REPOSITORY,
+        "source": ({
+            "kind": "github_issue", "repository": SOURCE_REPOSITORY,
             "issue": issue,
-        },
+        } if publication_action == "commit" else {
+            "kind": "telegram_owner", "repository": SOURCE_REPOSITORY,
+        }),
     }
 
 def _select_approved_commit_task(state_root: Path) -> Mapping[str, object] | None:
@@ -564,6 +691,15 @@ def run_once(root: Path, state_root: Path) -> PublicationDecision:
             checked_task_id, work_branch, _repository_base_sha(project), scope_files
         )
         commit_sha = commit_approved_change(project, authorization)
+        source=_mapping(task.get("source"), "source")
+        if source.get("kind") == "telegram_owner":
+            pr_url=_publish_verified_owner_draft(project,authorization,commit_sha)
+            _complete_owner_telegram_task(state_root,authorization.task_id,commit_sha,pr_url)
+            return _decision(
+                "PUBLISHED", "draft_pr_verified_and_task_completed",
+                authorization.task_id, commit_sha=commit_sha,
+                pull_request=pr_url,
+            )
         return _decision(
             "COMMITTED", "local_commit_created_or_resumed",
             authorization.task_id, commit_sha=commit_sha

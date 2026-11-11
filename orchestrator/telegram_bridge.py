@@ -58,7 +58,7 @@ HELP = (
     "/ai status\n"
     "/ai release <project> prepare\n"
     "/ai task <project> | <title> | <instructions>\n"
-    "/ai task <text>  (project: ak-bermet)"
+    "/ai task <text>  (project: ai-prof-control-center)"
 )
 
 
@@ -101,7 +101,7 @@ def _task_fields(path: Path) -> dict[str, str]:
     keys = (
         "Task-ID", "Project-Path", "Goal", "Blocked-Reason", "Failure-Reason",
         "Cancellation-Reason", "Current-Blocker", "Current-Failure",
-        "Cancelled-Reason", "Terminal-Reason",
+        "Cancelled-Reason", "Terminal-Reason", "Draft-PR", "Commit-SHA",
     )
     for key in keys:
         match = re.search(rf"(?mi)^\s*{re.escape(key)}:\s*([^\r\n]+)", text)
@@ -448,7 +448,7 @@ def parse_command(text: object) -> Command | None:
         return Command("invalid")
     parts = [part.strip() for part in payload.split("|")]
     if len(parts) == 1:
-        return Command("task", "ak-bermet", parts[0], parts[0], True)
+        return Command("task", "ai-prof-control-center", parts[0], parts[0], True)
     if len(parts) == 3 and all(parts):
         return Command("task", parts[0], parts[1], parts[2])
     return Command("invalid")
@@ -544,6 +544,8 @@ def submit_arguments(command: Command, projects: dict[str, dict]) -> tuple[list[
         "--work-branch", work_branch,
         "--scope", scope,
     ]
+    if project_id == "ai-prof-control-center":
+        args.extend(["--publication-action", "draft-pr"])
     return args, project_id
 
 

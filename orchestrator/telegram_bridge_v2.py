@@ -357,6 +357,13 @@ def task_state_snapshot() -> dict[str, tuple[str, str, str]]:
             continue
         project = project_by_path.get(fields.get("Project-Path", ""), "unknown")
         reason = legacy._terminal_reason(queue, fields) if queue in {"blocked", "failed"} else ""
+        if queue == "completed":
+            candidate=fields.get("Draft-PR", "")
+            if re.fullmatch(
+                r"https://github\.com/stvelikiy-star/ai-prof-control-center/pull/[1-9][0-9]*",
+                candidate,
+            ):
+                reason=candidate
         result[task_id] = (queue, project, reason)
     return result
 
@@ -374,7 +381,8 @@ def task_change_messages(before: dict, after: dict) -> list[str]:
         lines = ["AI PROF task update", f"Project: {_sanitize(project, 80)}",
                  f"Task-ID: {task_id}", f"State: {status}"]
         if reason:
-            lines.append(f"Reason: {_sanitize(reason, 160)}")
+            prefix="Draft PR" if queue == "completed" and reason.startswith("https://github.com/") else "Reason"
+            lines.append(f"{prefix}: {_sanitize(reason, 160)}")
         messages.append(legacy._telegram_truncate("\n".join(lines)))
     return messages
 

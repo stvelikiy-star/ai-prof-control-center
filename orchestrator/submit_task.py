@@ -262,6 +262,8 @@ def render_task(
     out_of_scope = "All files outside Scope-Files; commit, push, merge, deployment"
     if publication_action == "commit":
         out_of_scope = "All files outside Scope-Files; push, merge, deployment"
+    elif publication_action == "draft-pr":
+        out_of_scope = "All files outside Scope-Files; merge, deployment"
     values = [
         ("Task-ID", task_id),
         ("Execution-Mode", execution_mode),
@@ -411,7 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--execution-mode", choices=("code", "operations"), default="code")
     create.add_argument("--operation-profile")
     create.add_argument(
-        "--publication-action", choices=("commit",), default=None
+        "--publication-action", choices=("commit", "draft-pr"), default=None
     )
     create.add_argument("--publication-source-issue", type=int)
     create.add_argument("--dry-run", action="store_true")
@@ -515,6 +517,27 @@ def main() -> int:
                         "Publication-Repository",
                         "stvelikiy-star/ai-prof-control-center",
                     ),
+                ]
+            elif publication_action == "draft-pr":
+                if (
+                    args.project != "ai-prof-control-center"
+                    or args.execution_mode != "code"
+                    or args.operation_profile
+                    or base_branch != "maintenance/base"
+                    or args.publication_source_issue is not None
+                    or not re.fullmatch(r"feature/telegram-[0-9a-f]{8}-[0-9a-f]{12}", args.work_branch)
+                    or project.get("allow_commits") is not True
+                    or any(project.get(flag) is not False for flag in (
+                        "allow_push", "allow_merge", "allow_deployment"
+                    ))
+                    or scope != sorted(set(scope))
+                ):
+                    raise IntakeError("draft PR is outside owner-only AI PROF authority")
+                publication_metadata = [
+                    ("Publication-Contract-Version", "4"),
+                    ("Publication-Action", "draft-pr"),
+                    ("Publication-Source", "telegram-owner"),
+                    ("Publication-Repository", "stvelikiy-star/ai-prof-control-center"),
                 ]
             elif args.publication_source_issue is not None:
                 raise IntakeError(

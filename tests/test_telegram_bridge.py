@@ -136,13 +136,29 @@ class TelegramBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.parse_command("/ai status"), bridge.Command("status"))
         self.assertEqual(
             bridge.parse_command("/ai task Fix tests"),
-            bridge.Command("task", "ak-bermet", "Fix tests", "Fix tests", True),
+            bridge.Command("task", "ai-prof-control-center", "Fix tests", "Fix tests", True),
         )
         self.assertEqual(
             bridge.parse_command("/ai task ai-prof-pilot | Title | Instructions"),
             bridge.Command("task", "ai-prof-pilot", "Title", "Instructions"),
         )
         self.assertEqual(bridge.parse_command("/ai task one | two"), bridge.Command("invalid"))
+
+    def test_owner_telegram_draft_pr_is_limited_to_ai_prof_project(self):
+        projects={
+            'ai-prof-control-center':{'project_id':'ai-prof-control-center',
+                    'allowed_scope':['README.md'],'work_prefixes':['feature/']},
+            'ak-bermet':{'project_id':'ak-bermet',
+                    'allowed_scope':['src/**'],'work_prefixes':['feature/']},
+        }
+        owner=bridge.parse_command('/ai task Fix the AI PROF task documentation')
+        argv,project=bridge.submit_arguments(owner,projects)
+        self.assertEqual(project,'ai-prof-control-center')
+        self.assertEqual(argv[argv.index('--publication-action')+1],'draft-pr')
+        other=bridge.parse_command('/ai task ak-bermet | Fix | Fix hotel display')
+        argv,project=bridge.submit_arguments(other,projects)
+        self.assertEqual(project,'ak-bermet')
+        self.assertNotIn('--publication-action',argv)
 
     def test_project_resolution_is_exact_and_unknown_names_are_rejected(self):
         projects = {
@@ -219,7 +235,7 @@ class TelegramBridgeTests(unittest.TestCase):
             "Add a Supabase migration for bookings": "supabase/migrations",
         }
         for instructions, expected in cases.items():
-            command = bridge.parse_command(f"/ai task {instructions}")
+            command = bridge.parse_command(f"/ai task ak-bermet | Title | {instructions}")
             with self.subTest(instructions=instructions):
                 self.assertEqual(
                     bridge.select_scope(command, "ak-bermet", project), expected,
@@ -227,23 +243,18 @@ class TelegramBridgeTests(unittest.TestCase):
 
     def test_plain_task_defaults_to_exact_real_project(self):
         command = bridge.parse_command("/ai task Fix the booking form")
-        self.assertEqual(command.project, "ak-bermet")
+        self.assertEqual(command.project, "ai-prof-control-center")
         projects = {
-            "ak-bermet": {
-                "project_id": "ak-bermet",
-                "allowed_scope": ["src/**"],
-                "work_prefixes": ["feature/"],
-            },
-            "ak-bermet-pilot": {
-                "project_id": "ak-bermet-pilot",
-                "allowed_scope": ["ai-system/**"],
+            "ai-prof-control-center": {
+                "project_id": "ai-prof-control-center",
+                "allowed_scope": ["README.md", "docs/**", "tests/**"],
                 "work_prefixes": ["feature/"],
             },
         }
         args, project_id = bridge.submit_arguments(command, projects)
-        self.assertEqual(project_id, "ak-bermet")
-        self.assertEqual(args[args.index("--project") + 1], "ak-bermet")
-        self.assertEqual(args[args.index("--scope") + 1], "src")
+        self.assertEqual(project_id, "ai-prof-control-center")
+        self.assertEqual(args[args.index("--project") + 1], "ai-prof-control-center")
+        self.assertEqual(args[args.index("--scope") + 1], "README.md")
 
     def test_real_cli_reproduces_missing_contract_rejection_then_accepts_bridge_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,7 +310,7 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertIn("--work-branch", rejected.stderr)
 
             projects = {"ak-bermet": registry["projects"][0]}
-            command = bridge.parse_command("/ai task Fix checkout")
+            command = bridge.parse_command("/ai task ak-bermet | Fix checkout | Fix checkout")
             with (
                 mock.patch.object(bridge, "ROOT", root),
                 mock.patch.object(bridge, "STATE_DIR", state),
