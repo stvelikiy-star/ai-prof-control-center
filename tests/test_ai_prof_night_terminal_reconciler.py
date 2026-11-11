@@ -103,6 +103,87 @@ class AIProfNightTerminalReconcilerTests(unittest.TestCase):
         self.assertEqual(order, ["restore", "complete"])
         commit.assert_called_once_with(Path(legacy.PROJECT_PATH), self.authorization)
 
+    def test_owner_v4_publishes_draft_before_marking_completed(self):
+        self.task['source'] = {'kind': 'telegram_owner', 'repository': legacy.SOURCE_REPOSITORY}
+        self.task['work_branch'] = 'feature/telegram-01234567-0123456789ab'
+        self.work_branch = self.task['work_branch']
+        patches = self._common_patches()
+        url = 'https://github.com/stvelikiy-star/ai-prof-control-center/pull/999'
+        events = []
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+             mock.patch.object(gate.legacy, '_git', return_value='maintenance/base'), \
+             mock.patch.object(gate, '_exact_commit_from_branch', return_value=self.commit_sha), \
+             mock.patch.object(gate.legacy, '_publish_verified_owner_draft',
+                 side_effect=lambda *args: events.append('publish') or url) as publish, \
+             mock.patch.object(gate.legacy, '_complete_owner_telegram_task',
+                 side_effect=lambda *args: events.append('complete')) as complete, \
+             mock.patch.object(gate, '_complete_queue_task') as legacy_complete:
+            decision = gate.run_once(Path('/root'), Path('/state'))
+        self.assertEqual(decision.decision, 'PUBLISHED')
+        self.assertTrue(decision.published and decision.complete)
+        self.assertEqual(decision.pull_request, url)
+        self.assertEqual(events, ['publish', 'complete'])
+        publish.assert_called_once()
+        complete.assert_called_once_with(Path('/state'), self.task_id, self.commit_sha, url)
+        legacy_complete.assert_not_called()
+
+    def test_owner_v4_publish_failure_never_completes(self):
+        self.task['source'] = {'kind': 'telegram_owner', 'repository': legacy.SOURCE_REPOSITORY}
+        self.task['work_branch'] = 'feature/telegram-01234567-0123456789ab'
+        self.work_branch = self.task['work_branch']
+        patches = self._common_patches()
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+             mock.patch.object(gate.legacy, '_git', return_value='maintenance/base'), \
+             mock.patch.object(gate, '_exact_commit_from_branch', return_value=self.commit_sha), \
+             mock.patch.object(gate.legacy, '_publish_verified_owner_draft',
+                 side_effect=legacy.CommitBlocked('remote_pr_not_verified')), \
+             mock.patch.object(gate.legacy, '_complete_owner_telegram_task') as complete, \
+             mock.patch.object(gate, '_complete_queue_task') as generic_complete:
+            decision = gate.run_once(Path('/root'), Path('/state'))
+        self.assertEqual(decision.decision, 'BLOCKED')
+        complete.assert_not_called()
+        generic_complete.assert_not_called()
+
+    def test_recovery_rejects_non_owner_task_and_does_not_publish(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            completed = state/'queue/completed'
+            completed.mkdir(parents=True)
+            (completed/f'{self.task_id}.md').write_text('Task-ID: old\n',encoding='utf-8')
+            with mock.patch.object(gate.legacy, '_read_approved_task', return_value=self.task), \
+                 mock.patch.object(gate.legacy, '_publish_verified_owner_draft') as publish:
+                decision = gate.reconcile_completed_owner_task(Path('/root'),state,self.task_id)
+            self.assertEqual(decision.decision,'BLOCKED')
+            publish.assert_not_called()
+
+    def test_recovery_single_owner_task_updates_only_exact_terminal_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state=Path(temp)
+            completed=state/'queue/completed'
+            completed.mkdir(parents=True)
+            record=completed/f'{self.task_id}.md'
+            original='Task-ID: '+self.task_id+'\nPublication-Action: draft-pr\n'
+            record.write_text(original,encoding='utf-8')
+            owner=dict(self.task)
+            owner['source']={'kind':'telegram_owner','repository':legacy.SOURCE_REPOSITORY}
+            owner['work_branch']='feature/telegram-01234567-0123456789ab'
+            url='https://github.com/stvelikiy-star/ai-prof-control-center/pull/999'
+            with mock.patch.object(gate.legacy,'_read_approved_task', return_value=owner), \
+                 mock.patch.object(gate.legacy,'_validate_task',return_value=(self.task_id,owner['work_branch'],self.scope)), \
+                 mock.patch.object(gate.legacy,'_load_profile',return_value={}), \
+                 mock.patch.object(gate.legacy,'_validate_profile'), \
+                 mock.patch.object(gate.legacy,'_verify_stage_evidence'), \
+                 mock.patch.object(gate.legacy,'_repository_base_sha',return_value=self.base_sha), \
+                 mock.patch.object(gate,'_exact_commit_from_branch',return_value=self.commit_sha), \
+                 mock.patch.object(gate.legacy,'_publish_verified_owner_draft',return_value=url) as publish:
+                result=gate.reconcile_completed_owner_task(Path('/root'),state,self.task_id)
+                self.assertEqual(result.decision,'PUBLISHED')
+                self.assertIn('Commit-SHA: '+self.commit_sha,record.read_text())
+                self.assertIn('Draft-PR: '+url,record.read_text())
+                again=gate.reconcile_completed_owner_task(Path('/root'),state,self.task_id)
+                self.assertEqual(again.decision,'BLOCKED')
+                publish.assert_called_once()
+
     def test_nonmatching_checkout_without_exact_commit_fails_closed(self):
         patches = self._common_patches()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
