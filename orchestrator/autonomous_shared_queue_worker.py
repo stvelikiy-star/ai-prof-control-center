@@ -335,10 +335,16 @@ def tick() -> str:
     # between its decision to start and the future cutover lock acquisition.
     try:
         with route.gate():
-            if not route.permitted():
+            selected = route.mode()
+            if selected == 'frozen':
                 return "RESOURCE_DEFERRED_ROUTE_FROZEN"
+            if selected not in ('legacy', 'fifo'):
+                return "RESOURCE_DEFERRED_ROUTE_UNVERIFIED"
     except route.RouteError:
         return "RESOURCE_DEFERRED_ROUTE_UNVERIFIED"
+    if selected == 'fifo':
+        import global_fifo_owner_runtime as fifo_runtime
+        return fifo_runtime.tick()
     root = intake.QUEUE_ROOT
     active = sorted((root / "autonomous_active").glob("*.json"))
     if len(active) > 1:

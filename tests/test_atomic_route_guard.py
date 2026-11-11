@@ -51,9 +51,16 @@ class RouteAtomicTests(unittest.TestCase):
         self.assertEqual(self.change('frozen'),'frozen')
         self.assertEqual(self.change('frozen'),'frozen')
 
-    def test_no_fifo_activation(self):
+    def test_direct_fifo_activation_forbidden(self):
         with self.assertRaises(route.RouteError):self.change('fifo')
         self.assertFalse(self.mode.exists())
+
+    def test_explicit_frozen_intermediary_required_for_fifo_and_rollback(self):
+        self.assertEqual(self.change('frozen'),'frozen')
+        self.assertEqual(self.change('fifo'),'fifo')
+        with self.assertRaises(route.RouteError):self.change('legacy')
+        self.assertEqual(self.change('frozen'),'frozen')
+        self.assertEqual(self.change('legacy'),'legacy')
 
     def test_pending_legacy_blocks_freeze(self):
         (self.legacy/'autonomous_pending'/'AI_PROF_AUTO_MAIN_900.json').write_text('{}')
@@ -106,7 +113,7 @@ class RouteAtomicTests(unittest.TestCase):
         with self.assertRaises(route.RouteError):self.change('frozen')
 
     def test_unapproved_route_mode_fails_closed(self):
-        self.mode.write_text(json.dumps({'version':1,'mode':'fifo'}))
+        self.mode.write_text(json.dumps({'version':1,'mode':'unsupported'}))
         self.mode.chmod(0o600)
         with self.assertRaises(route.RouteError):route.mode()
 

@@ -79,7 +79,8 @@ def mode(*, file: Path | None = None) -> str:
         if not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode & 0o077 or s.st_size>128:
             raise RouteError('route mode file unsafe')
         payload=json.loads(path.read_text(encoding='ascii'))
-        if payload not in ({'version':1,'mode':'legacy'}, {'version':1,'mode':'frozen'}):
+        if payload not in ({'version':1,'mode':'legacy'}, {'version':1,'mode':'frozen'},
+                           {'version':1,'mode':'fifo'}):
             raise RouteError('unsupported route mode')
         return payload['mode']
     except (OSError,ValueError,UnicodeError) as exc:
@@ -109,7 +110,7 @@ def _empty(path: Path) -> bool:
 
 
 def _write(path: Path, new_mode: str) -> None:
-    if new_mode not in ('legacy','frozen'):
+    if new_mode not in ('legacy','frozen','fifo'):
         raise RouteError('unsupported mode transition')
     _directory(path.parent)
     if path.is_symlink():
@@ -137,8 +138,8 @@ def transition(target: str, *, lock: Path | None = None,
 
     Never activates FIFO, changes tasks, executes work or restarts services.
     """
-    if target not in ('legacy','frozen'):
-        raise RouteError('no FIFO activation route implemented')
+    if target not in ('legacy','frozen','fifo'):
+        raise RouteError('unsupported route mode')
     route_lock=ROUTE_LOCK if lock is None else lock
     state=MODE_FILE if file is None else file
     worker=LEGACY_WORKER_LOCK if worker_lock is None else worker_lock
@@ -165,6 +166,10 @@ def transition(target: str, *, lock: Path | None = None,
                 with gate(lock=route_lock):
                     current=mode(file=state)
                     if current==target:return current
+                    # Route activation and rollback require an explicit frozen
+                    # intermediary, never a direct executable-to-executable hop.
+                    if {current,target} == {'legacy','fifo'}:
+                        raise RouteError('direct executable route switch forbidden')
                     if not all(_empty(path) for path in (
                         old/'autonomous_pending',old/'autonomous_active',
                         new/'pending',new/'active')):

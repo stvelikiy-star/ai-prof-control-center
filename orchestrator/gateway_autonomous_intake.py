@@ -252,8 +252,14 @@ def process(issue: dict, issues_state: dict) -> bool:
     """
     try:
         with route.gate():
-            if not route.permitted():
+            selected = route.mode()
+            if selected == 'frozen':
                 return False
-            return _process_when_authorized_route(issue, issues_state)
+            if selected == 'fifo':
+                import global_fifo_owner_runtime as fifo_runtime
+                return fifo_runtime.process_issue(issue, issues_state)
+            if selected == 'legacy':
+                return _process_when_authorized_route(issue, issues_state)
+            raise route.RouteError('unsupported autonomous route')
     except route.RouteError as exc:
         raise AutoIntakeError('autonomous routing cannot be verified') from exc
