@@ -77,9 +77,8 @@ class SubmitTaskTests(unittest.TestCase):
         project = next(
             item for item in registry["projects"] if item["project_id"] == "ak-bermet"
         ).copy()
-        # The historical checkout may have been removed from this Ubuntu.
-        # Validate check-script contracts using an isolated fixture instead
-        # of weakening the real npm-script verification or restoring a fake repo.
+        # Keep npm script validation in an isolated fixture. The unrelated
+        # AK BERMET checkout need not exist on this Ubuntu host.
         with tempfile.TemporaryDirectory() as tmp:
             project["path"] = tmp
             (Path(tmp) / "package.json").write_text(

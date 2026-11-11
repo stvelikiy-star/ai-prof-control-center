@@ -108,6 +108,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
         self.fixture_publish_target()
         project = self.fixture_project
         with patch.object(
+            Path, "resolve", return_value=project,
+        ), patch.object(
             publisher,
             "git_text",
             side_effect=["https://example.invalid/wrong.git", "https://example.invalid/wrong.git"],
@@ -127,6 +129,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             "owner": {"login": gate.OWNER},
         }
         with patch.object(
+            Path, "resolve", return_value=project,
+        ), patch.object(
             publisher,
             "git_text",
             side_effect=[
@@ -162,6 +166,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
         for repo_payload in bad_payloads:
             with self.subTest(payload=repo_payload):
                 with patch.object(
+                    Path, "resolve", return_value=project,
+                ), patch.object(
                     publisher,
                     "git_text",
                     side_effect=[
