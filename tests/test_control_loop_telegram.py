@@ -93,10 +93,10 @@ class TelegramBridgeSupervisorTests(unittest.TestCase):
         deadline = time.monotonic() + 5
 
         while time.monotonic() < deadline:
-            if (
-                runs_path.exists()
-                and int(runs_path.read_text()) >= 2
-            ):
+            # Another process can temporarily truncate the counter while
+            # writing; treat that instant as not-yet-complete, not a crash.
+            observed = runs_path.read_text().strip() if runs_path.exists() else ""
+            if observed.isdecimal() and int(observed) >= 2:
                 break
             time.sleep(0.05)
         else:

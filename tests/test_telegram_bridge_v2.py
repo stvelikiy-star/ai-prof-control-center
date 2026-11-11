@@ -165,6 +165,66 @@ class TelegramBridgeV2Tests(unittest.TestCase):
             self.assertEqual(v2.task_details(value), "Invalid Task-ID.")
             self.assertEqual(v2.task_logs(value), "Invalid Task-ID.")
 
+    def test_completed_task_details_show_exact_verified_draft_pr(self):
+        task_id = "AI_PROF_20261111T065054Z_9406DB"
+        draft_pr = "https://github.com/stvelikiy-star/ai-prof-control-center/pull/123"
+        locations = [("completed", Path("task.md"), {
+            "Goal": "Show verified Draft PR",
+            "Project-Path": "/tmp/control-center",
+            "Draft-PR": draft_pr,
+        })]
+        with mock.patch.object(v2, "_task_locations", return_value=locations), \
+             mock.patch.object(v2, "_projects", return_value={
+                 "control-center": {"path": "/tmp/control-center"}
+             }), \
+             mock.patch.object(legacy, "authoritative_task_state", return_value="completed"), \
+             mock.patch.object(legacy, "_terminal_reason", return_value=""):
+            text = v2.task_details(task_id)
+        self.assertIn(f"Draft-PR: {draft_pr}", text)
+        self.assertNotIn("merged", text.lower())
+
+    def test_completed_task_details_hide_malicious_draft_pr(self):
+        task_id = "AI_PROF_20261111T065054Z_9406DB"
+        trusted_url = "https://github.com/stvelikiy-star/ai-prof-control-center/pull/123"
+        untrusted_urls = (
+            f"{trusted_url}?token=SUPERSECRET",
+            f"{trusted_url}#fragment",
+            f"{trusted_url}/files",
+            "https://github.com/stvelikiy-star/other/pull/123",
+            "https://github.com.evil.invalid/stvelikiy-star/ai-prof-control-center/pull/123",
+        )
+        for untrusted_url in untrusted_urls:
+            with self.subTest(untrusted_url=untrusted_url):
+                locations = [("completed", Path("task.md"), {
+                    "Goal": "Show verified Draft PR",
+                    "Project-Path": "/tmp/control-center",
+                    "Draft-PR": untrusted_url,
+                })]
+                with mock.patch.object(v2, "_task_locations", return_value=locations), \
+                     mock.patch.object(v2, "_projects", return_value={}), \
+                     mock.patch.object(legacy, "authoritative_task_state", return_value="completed"), \
+                     mock.patch.object(legacy, "_terminal_reason", return_value=""):
+                    text = v2.task_details(task_id)
+                self.assertNotIn("Draft-PR:", text)
+                self.assertNotIn("SUPERSECRET", text)
+                self.assertNotIn(untrusted_url, text)
+
+    def test_non_completed_task_details_hide_verified_draft_pr(self):
+        task_id = "AI_PROF_20261111T065054Z_9406DB"
+        draft_pr = "https://github.com/stvelikiy-star/ai-prof-control-center/pull/123"
+        locations = [("review", Path("task.md"), {
+            "Goal": "Show verified Draft PR",
+            "Project-Path": "/tmp/control-center",
+            "Draft-PR": draft_pr,
+        })]
+        with mock.patch.object(v2, "_task_locations", return_value=locations), \
+             mock.patch.object(v2, "_projects", return_value={}), \
+             mock.patch.object(legacy, "authoritative_task_state", return_value="review"), \
+             mock.patch.object(legacy, "_terminal_reason", return_value=""):
+            text = v2.task_details(task_id)
+        self.assertNotIn("Draft-PR:", text)
+        self.assertNotIn(draft_pr, text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -39,7 +39,7 @@ except ImportError:  # Direct script execution from orchestrator/.
     import control_loop_service as base  # type: ignore[no-redef]
 
 MAINTENANCE_PROJECT_PATH = "/home/agent/projects/ai-prof-control-center-maintenance"
-KOL_PROJECT_PATH = "/home/agent/Загрузки/kol-travel-platform"
+KOL_PROJECT_PATH = "/home/agent/projects/kol-ai-prof-v4-runner"
 IN_FLIGHT_QUEUES = ("active", "review", "pending_codex", "approved")
 KOL_V4_QUEUES = ("pending", "active", "review", "pending_codex", "approved")
 AK_BERMET_PUBLISHER_STAGES = {
@@ -196,6 +196,30 @@ def _upgrade_operations_binding(
     return upgraded
 
 
+def _next_pending_code_project(runtime: Path) -> str | None:
+    """Mirror Stage 01A's first-code-task order without claiming any task.
+
+    Malformed entries fail closed: do not let an unknown task bypass the
+    maintenance-checkout single-flight guard.
+    """
+    pending = runtime / "queue/pending"
+    if not pending.exists():
+        return None
+    if pending.is_symlink() or not pending.is_dir():
+        return MAINTENANCE_PROJECT_PATH
+    for task in sorted(pending.glob("*.md")):
+        try:
+            if task.is_symlink() or not task.is_file() or task.stat().st_size > MAX_TASK_BYTES:
+                return MAINTENANCE_PROJECT_PATH
+            body = task.read_text(encoding="utf-8")
+            mode = _field(body, "Execution-Mode")
+            if mode is None or mode == "code":
+                return _field(body, "Project-Path") or MAINTENANCE_PROJECT_PATH
+        except (OSError, UnicodeError):
+            return MAINTENANCE_PROJECT_PATH
+    return None
+
+
 def _commands_with_night_safe_ai_prof_gate(
     root: Path,
     runtime: Path,
@@ -205,7 +229,9 @@ def _commands_with_night_safe_ai_prof_gate(
         root,
         base._commands_with_publishers(root, runtime),
     )
-    if _maintenance_code_task_in_flight(runtime):
+    # Restrict the shared maintenance checkout, not unrelated project queues.
+    if (_maintenance_code_task_in_flight(runtime)
+        and _next_pending_code_project(runtime) in (None, MAINTENANCE_PROJECT_PATH)):
         established = [
             (stage, argv)
             for stage, argv in established

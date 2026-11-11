@@ -515,6 +515,29 @@ class GitHubTaskGatewayTests(unittest.TestCase):
         self.assertFalse(kwargs.get("shell", False))
         self.assertEqual(kwargs["env"]["GH_PROMPT_DISABLED"], "1")
 
+    def test_timeout_does_not_crash_gateway_poll(self):
+        with (
+            mock.patch.object(gateway.shutil, "which", return_value="/usr/bin/gh"),
+            mock.patch.object(
+                gateway.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(["gh", "api"], 30),
+            ),
+        ):
+            with self.assertRaisesRegex(gateway.GatewayError, "timed out"):
+                gateway.run_gh(["api", "repos/stvelikiy-star/ai-prof-control-center"])
+        with mock.patch.object(gateway, "list_open_issues", side_effect=gateway.GatewayError("temporarily unavailable")):
+            with mock.patch.object(gateway, "load_state", return_value={"version": 1, "issues": {}}):
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.poll_once()
+
+    def test_os_error_is_converted_to_retryable_gateway_error(self):
+        with (
+            mock.patch.object(gateway.shutil, "which", return_value="/usr/bin/gh"),
+            mock.patch.object(gateway.subprocess, "run", side_effect=OSError("offline")),
+        ):
+            with self.assertRaisesRegex(gateway.GatewayError, "could not start"):
+                gateway.run_gh(["api", "repos/stvelikiy-star/ai-prof-control-center"])
+
     def test_systemd_gateway_is_hardened_and_has_no_secret_environment(self):
         unit = (
             ROOT / "systemd" / "ai-prof-github-task-gateway.service"

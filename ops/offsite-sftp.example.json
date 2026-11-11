@@ -1,0 +1,8 @@
+{
+  "host": "BACKUP_HOST_EXAMPLE",
+  "port": 22,
+  "user": "aiprofbackup",
+  "remote_dir": "/backups/ai-prof",
+  "identity_file": "/home/agent/.ssh/ai_prof_backup_ed25519",
+  "known_hosts": "/home/agent/.ssh/ai_prof_backup_known_hosts"
+}

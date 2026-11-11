@@ -16,8 +16,8 @@ class ResortOsRegistrationTests(unittest.TestCase):
 
     def test_identity_and_branch_contract(self):
         self.assertEqual(self.project["path"], "/home/agent/projects/resort-os")
-        self.assertIs(self.project["enabled"], True)
-        self.assertNotIn("disabled_reason", self.project)
+        # Owner explicitly suspended MARINA SMART agent tasks pending release.
+        self.assertIs(self.project["enabled"], False)
         self.assertEqual(self.project["base_branch"], "main")
         self.assertEqual(self.project["allowed_base_branches"], ["main"])
         self.assertEqual(self.project["agent_context"], "agents/resort-os")

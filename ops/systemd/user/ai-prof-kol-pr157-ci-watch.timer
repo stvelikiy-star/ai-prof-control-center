@@ -1,0 +1,35 @@
+[Unit]
+Description=One-time KÖL PR 157 CI checks 10 Nov 2026 only
+
+[Timer]
+OnCalendar=2026-11-10 12:40:00
+OnCalendar=2026-11-10 12:50:00
+OnCalendar=2026-11-10 13:00:00
+OnCalendar=2026-11-10 13:10:00
+OnCalendar=2026-11-10 13:20:00
+OnCalendar=2026-11-10 13:30:00
+OnCalendar=2026-11-10 13:40:00
+OnCalendar=2026-11-10 13:50:00
+OnCalendar=2026-11-10 14:00:00
+OnCalendar=2026-11-10 14:10:00
+OnCalendar=2026-11-10 14:20:00
+OnCalendar=2026-11-10 14:30:00
+OnCalendar=2026-11-10 14:40:00
+OnCalendar=2026-11-10 14:50:00
+OnCalendar=2026-11-10 15:00:00
+OnCalendar=2026-11-10 15:10:00
+OnCalendar=2026-11-10 15:20:00
+OnCalendar=2026-11-10 15:30:00
+OnCalendar=2026-11-10 15:40:00
+OnCalendar=2026-11-10 15:50:00
+OnCalendar=2026-11-10 16:00:00
+OnCalendar=2026-11-10 16:10:00
+OnCalendar=2026-11-10 16:20:00
+OnCalendar=2026-11-10 16:30:00
+OnCalendar=2026-11-10 16:40:00
+AccuracySec=1min
+Persistent=false
+Unit=ai-prof-kol-pr157-ci-watch.service
+
+[Install]
+WantedBy=timers.target

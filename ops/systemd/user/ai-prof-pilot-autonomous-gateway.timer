@@ -1,0 +1,11 @@
+[Unit]
+Description=AI PROF limited private pilot repository poll every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=10s
+Persistent=false
+Unit=ai-prof-pilot-autonomous-gateway.service
+
+[Install]
+WantedBy=timers.target

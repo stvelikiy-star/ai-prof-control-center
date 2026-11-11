@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,16 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
     def tearDown(self) -> None:
         for name, value in self._publisher_state.items():
             setattr(publisher, name, value)
+
+    def fixture_publish_target(self) -> None:
+        """Use a real disposable directory for identity checks, not absent host checkout."""
+        tmp = tempfile.TemporaryDirectory(prefix="ai-prof-ak-publisher-test-")
+        self.addCleanup(tmp.cleanup)
+        self.fixture_project = Path(tmp.name)
+
+    def validate_fixture_target(self) -> None:
+        with patch.object(gate, "AK_BERMET_PROJECT", self.fixture_project):
+            gate._validate_publish_target(self.fixture_project)
 
     def sample(self, branch: str, instructions: str = "owner task") -> str:
         return "\n".join(
@@ -94,7 +105,8 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             publisher.validate_supported_task(text)
 
     def test_target_gate_rejects_wrong_origin_before_github(self) -> None:
-        project = gate.AK_BERMET_PROJECT
+        self.fixture_publish_target()
+        project = self.fixture_project
         with patch.object(
             Path, "resolve", return_value=project,
         ), patch.object(
@@ -103,11 +115,12 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             side_effect=["https://example.invalid/wrong.git", "https://example.invalid/wrong.git"],
         ), patch.object(publisher, "run") as run_mock:
             with self.assertRaises(publisher.PublisherError):
-                gate._validate_publish_target(project)
+                self.validate_fixture_target()
             run_mock.assert_not_called()
 
     def test_target_gate_accepts_exact_public_repository_identity(self) -> None:
-        project = gate.AK_BERMET_PROJECT
+        self.fixture_publish_target()
+        project = self.fixture_project
         repo_payload = {
             "full_name": gate.AK_BERMET_REPOSITORY,
             "private": False,
@@ -129,10 +142,11 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
             "run",
             return_value=SimpleNamespace(stdout=json.dumps(repo_payload)),
         ):
-            gate._validate_publish_target(project)
+            self.validate_fixture_target()
 
     def test_target_gate_rejects_private_or_wrong_repository_identity(self) -> None:
-        project = gate.AK_BERMET_PROJECT
+        self.fixture_publish_target()
+        project = self.fixture_project
         bad_payloads = [
             {
                 "full_name": gate.AK_BERMET_REPOSITORY,
@@ -166,7 +180,7 @@ class AkBermetApprovedPublisherTests(unittest.TestCase):
                     return_value=SimpleNamespace(stdout=json.dumps(repo_payload)),
                 ):
                     with self.assertRaises(publisher.PublisherError):
-                        gate._validate_publish_target(project)
+                        self.validate_fixture_target()
 
     def test_telegram_source_does_not_post_fake_github_issue(self) -> None:
         with patch.object(gate, "_ORIGINAL_POST_SOURCE_COMMENT") as original:

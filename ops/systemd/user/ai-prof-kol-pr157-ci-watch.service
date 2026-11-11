@@ -1,0 +1,12 @@
+[Unit]
+Description=AI PROF bounded owner-only Telegram CI notification for KÖL PR 157
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/kol_pr157_ci_monitor.py
+Environment=HOME=/home/agent
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90s

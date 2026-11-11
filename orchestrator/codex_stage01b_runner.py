@@ -351,6 +351,7 @@ def is_codex_permission_failure(text: str) -> bool:
             "not authorized",
             "not entitled",
             "quota exceeded",
+            "usage limit",
             "rate limit exceeded",
             "billing",
             "does not have access",

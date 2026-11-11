@@ -58,19 +58,107 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertIn("Push disabled: yes", message)
             self.assertIn("Deployment disabled: yes", message)
 
+    def test_owner_status_shows_autonomous_queue_counts_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for folder in ("autonomous_pending", "autonomous_active",
+                           "autonomous_completed", "autonomous_blocked"):
+                (root / "queue" / folder).mkdir(parents=True)
+            (root / "queue" / "autonomous_completed" / "AI_PROF_AUTO_MAIN_218.json").write_text(
+                '{"secret":"must-not-appear"}', encoding="utf-8")
+            status = bridge.status_message(root, {})
+            self.assertIn("ожидает 0, в работе 0, завершено 1, заблокировано 0", status)
+            self.assertNotIn("must-not-appear", status)
+            self.assertNotIn("218.json", status)
+
+    def test_fifo_counts_separate_from_legacy_without_task_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);base=root/'queue'
+            for label in ('autonomous_pending','autonomous_active',
+                          'autonomous_completed','autonomous_blocked'):
+                (base/label).mkdir(parents=True,exist_ok=True)
+            (base/'autonomous_completed'/'AI_PROF_AUTO_MAIN_900.json').write_text('{}')
+            fifo=base/'global-agent-fifo-v1'
+            for label in ('pending','active','completed','blocked'):
+                (fifo/label).mkdir(parents=True)
+            (fifo/'completed'/'000000000001-aaaaaaaaaaaaaaaa.json').write_text(
+                '{"secret":"must-not-be-shown"}')
+            status=bridge.status_message(root,{})
+            self.assertIn('Автономная очередь: ожидает 0, в работе 0, завершено 1, заблокировано 0',status)
+            self.assertIn('FIFO (отдельный учёт): ожидает 0, в работе 0, завершено 1, заблокировано 0',status)
+            self.assertNotIn('must-not-be-shown',status)
+            self.assertNotIn('000000000001-',status)
+
+    def test_fifo_uninitialized_explicitly_not_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: не активирована')
+
+    def test_fifo_symlink_and_invalid_files_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary)/'queue';base.mkdir()
+            (base/'global-agent-fifo-v1').symlink_to(base)
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: недоступна')
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary)/'queue'/'global-agent-fifo-v1'
+            for label in ('pending','active','completed','blocked'):
+                (base/label).mkdir(parents=True,exist_ok=True)
+            (base/'pending'/'wrong.json').write_text('{}')
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: недоступна')
+
+    def test_missing_queue_does_not_claim_empty_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIn("Автономная очередь: недоступна",
+                          bridge.status_message(Path(temporary), {}))
+
+    def test_autonomous_queue_symlink_denied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "queue").mkdir()
+            (root / "queue" / "autonomous_completed").symlink_to(root)
+            self.assertEqual(bridge.autonomous_queue_status(root),
+                             "Автономная очередь: недоступна")
+
+    def test_autonomous_queue_bad_filename_denied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            d = root / "queue" / "autonomous_pending"
+            d.mkdir(parents=True)
+            (d / "rogue.json").write_text('{}')
+            self.assertEqual(bridge.autonomous_queue_status(root),
+                             "Автономная очередь: недоступна")
+
     def test_command_parsing_and_ordinary_messages(self):
         self.assertIsNone(bridge.parse_command("daily report complete"))
         self.assertEqual(bridge.parse_command("/ai help"), bridge.Command("help"))
         self.assertEqual(bridge.parse_command("/ai status"), bridge.Command("status"))
         self.assertEqual(
             bridge.parse_command("/ai task Fix tests"),
-            bridge.Command("task", "ak-bermet", "Fix tests", "Fix tests", True),
+            bridge.Command("task", "ai-prof-control-center", "Fix tests", "Fix tests", True),
         )
         self.assertEqual(
             bridge.parse_command("/ai task ai-prof-pilot | Title | Instructions"),
             bridge.Command("task", "ai-prof-pilot", "Title", "Instructions"),
         )
         self.assertEqual(bridge.parse_command("/ai task one | two"), bridge.Command("invalid"))
+
+    def test_owner_telegram_draft_pr_is_limited_to_ai_prof_project(self):
+        projects={
+            'ai-prof-control-center':{'project_id':'ai-prof-control-center',
+                    'allowed_scope':['README.md'],'work_prefixes':['feature/']},
+            'ak-bermet':{'project_id':'ak-bermet',
+                    'allowed_scope':['src/**'],'work_prefixes':['feature/']},
+        }
+        owner=bridge.parse_command('/ai task Fix the AI PROF task documentation')
+        argv,project=bridge.submit_arguments(owner,projects)
+        self.assertEqual(project,'ai-prof-control-center')
+        self.assertEqual(argv[argv.index('--publication-action')+1],'draft-pr')
+        other=bridge.parse_command('/ai task ak-bermet | Fix | Fix hotel display')
+        argv,project=bridge.submit_arguments(other,projects)
+        self.assertEqual(project,'ak-bermet')
+        self.assertNotIn('--publication-action',argv)
 
     def test_project_resolution_is_exact_and_unknown_names_are_rejected(self):
         projects = {
@@ -147,7 +235,7 @@ class TelegramBridgeTests(unittest.TestCase):
             "Add a Supabase migration for bookings": "supabase/migrations",
         }
         for instructions, expected in cases.items():
-            command = bridge.parse_command(f"/ai task {instructions}")
+            command = bridge.parse_command(f"/ai task ak-bermet | Title | {instructions}")
             with self.subTest(instructions=instructions):
                 self.assertEqual(
                     bridge.select_scope(command, "ak-bermet", project), expected,
@@ -155,23 +243,18 @@ class TelegramBridgeTests(unittest.TestCase):
 
     def test_plain_task_defaults_to_exact_real_project(self):
         command = bridge.parse_command("/ai task Fix the booking form")
-        self.assertEqual(command.project, "ak-bermet")
+        self.assertEqual(command.project, "ai-prof-control-center")
         projects = {
-            "ak-bermet": {
-                "project_id": "ak-bermet",
-                "allowed_scope": ["src/**"],
-                "work_prefixes": ["feature/"],
-            },
-            "ak-bermet-pilot": {
-                "project_id": "ak-bermet-pilot",
-                "allowed_scope": ["ai-system/**"],
+            "ai-prof-control-center": {
+                "project_id": "ai-prof-control-center",
+                "allowed_scope": ["README.md", "docs/**", "tests/**"],
                 "work_prefixes": ["feature/"],
             },
         }
         args, project_id = bridge.submit_arguments(command, projects)
-        self.assertEqual(project_id, "ak-bermet")
-        self.assertEqual(args[args.index("--project") + 1], "ak-bermet")
-        self.assertEqual(args[args.index("--scope") + 1], "src")
+        self.assertEqual(project_id, "ai-prof-control-center")
+        self.assertEqual(args[args.index("--project") + 1], "ai-prof-control-center")
+        self.assertEqual(args[args.index("--scope") + 1], "README.md")
 
     def test_real_cli_reproduces_missing_contract_rejection_then_accepts_bridge_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,7 +310,7 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertIn("--work-branch", rejected.stderr)
 
             projects = {"ak-bermet": registry["projects"][0]}
-            command = bridge.parse_command("/ai task Fix checkout")
+            command = bridge.parse_command("/ai task ak-bermet | Fix checkout | Fix checkout")
             with (
                 mock.patch.object(bridge, "ROOT", root),
                 mock.patch.object(bridge, "STATE_DIR", state),

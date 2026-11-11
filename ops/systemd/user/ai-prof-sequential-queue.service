@@ -1,0 +1,22 @@
+[Unit]
+Description=AI PROF durable sequential owner-approved jobs, private pilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/agent/projects/ai-prof-control-center
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/sequential_job_dispatcher.py
+Environment=HOME=/home/agent
+Environment=GH_CONFIG_DIR=/home/agent/.config/gh
+Environment=GH_PROMPT_DISABLED=1
+Environment=GIT_TERMINAL_PROMPT=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=false
+KillMode=control-group
+MemoryMax=1800M
+TasksMax=128
+TimeoutStartSec=600s

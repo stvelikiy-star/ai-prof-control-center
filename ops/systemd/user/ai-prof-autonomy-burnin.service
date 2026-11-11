@@ -1,0 +1,10 @@
+[Unit]
+Description=AI PROF two-hour autonomous read-only acceptance sampler
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/agent/projects/ai-prof-control-center/orchestrator/autonomy_burnin_2h.py tick
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90s

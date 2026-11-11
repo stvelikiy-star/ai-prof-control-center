@@ -55,6 +55,32 @@ def issue(number: int = 172) -> dict:
 
 
 class KolV4GatewayIntakeBoundaryTests(unittest.TestCase):
+    def test_missing_imported_task_reports_orphan_once_without_duplicate(self):
+        record = {"task_id": "KOL_TRAVEL_PLATFORM_20260830T142940Z_C13938",
+                  "status": "imported", "last_reported_state": "not found",
+                  "last_reported_reason": ""}
+        state = {"172": record}
+        with (
+            mock.patch.object(gateway, "task_public_state", return_value=("not found", "")),
+            mock.patch.object(gateway, "post_comment") as post,
+            mock.patch.object(v4, "submit_contract") as submit_contract,
+        ):
+            self.assertTrue(service_v4.process_kol_v4_issue(issue(), state))
+            self.assertEqual(state["172"]["status"], "orphaned")
+            self.assertIn("создание запрещено", post.call_args.args[1].lower())
+            self.assertFalse(service_v4.process_kol_v4_issue(issue(), state))
+            post.assert_called_once()
+            submit_contract.assert_not_called()
+
+    def test_existing_task_preserves_normal_reporting(self):
+        state = {"172": {"task_id": "KOL_TRAVEL_PLATFORM_20260830T142940Z_C13938"}}
+        with (
+            mock.patch.object(gateway, "task_public_state", return_value=("approved", "")),
+            mock.patch.object(gateway, "report_task_state", return_value=True) as report,
+        ):
+            self.assertTrue(service_v4.process_kol_v4_issue(issue(), state))
+            report.assert_called_once()
+
     def test_expected_intake_rejection_does_not_escape_and_kill_gateway(self):
         issues_state: dict = {}
         failure = submit.IntakeError(

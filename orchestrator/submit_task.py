@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_paths import DEFAULT_STATE_ROOT, initialize
 from operation_profiles import resolve_profile
-from project_registry import allowed_base_branches
+from project_registry import allowed_base_branches, project_enabled
 
 
 DEFAULT_ROOT = Path("/home/agent/projects/ai-prof-control-center")
@@ -40,7 +40,10 @@ class IntakeError(ValueError):
     pass
 
 
-def read_registry(root: Path, *, validate_project: bool = True) -> dict:
+def read_registry(
+    root: Path, *, validate_project: bool = True, selected_project: str | None = None
+) -> dict:
+    """Validate every contract, but inspect only the selected checkout at intake."""
     path = root / "orchestrator" / "projects.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -86,8 +89,11 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
         if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
             raise IntakeError(f"project path must be absolute: {project_id}")
         project = Path(raw_path)
+        # An unavailable unrelated checkout must not veto a selected project.
+        # Keep strict resolution and Git validation for the actual target.
+        inspect_checkout = selected_project is None or project_id == selected_project
         try:
-            resolved = project.resolve(strict=True)
+            resolved = project.resolve(strict=inspect_checkout)
         except OSError as exc:
             raise IntakeError(f"project unavailable: {project_id}: {exc}") from exc
         if resolved != project:
@@ -101,9 +107,15 @@ def read_registry(root: Path, *, validate_project: bool = True) -> dict:
         except ValueError as exc:
             raise IntakeError(f"invalid base branches: {project_id}: {exc}") from exc
         context = (root / item["agent_context"]).resolve()
-        if root.resolve() not in context.parents or not context.is_dir():
+        if root.resolve() not in context.parents or (inspect_checkout and not context.is_dir()):
             raise IntakeError(f"invalid agent context: {project_id}")
-        if validate_project:
+        try:
+            enabled = project_enabled(item)
+        except ValueError as exc:
+            raise IntakeError(f"invalid enabled flag: {project_id}") from exc
+        if inspect_checkout and not enabled:
+            raise IntakeError(f"project is disabled: {project_id}")
+        if validate_project and inspect_checkout:
             if not (project / ".git").is_dir():
                 raise IntakeError(f"project is not a Git repository: {project_id}")
             for branch in branches:
@@ -250,6 +262,8 @@ def render_task(
     out_of_scope = "All files outside Scope-Files; commit, push, merge, deployment"
     if publication_action == "commit":
         out_of_scope = "All files outside Scope-Files; push, merge, deployment"
+    elif publication_action == "draft-pr":
+        out_of_scope = "All files outside Scope-Files; merge, deployment"
     values = [
         ("Task-ID", task_id),
         ("Execution-Mode", execution_mode),
@@ -399,7 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--execution-mode", choices=("code", "operations"), default="code")
     create.add_argument("--operation-profile")
     create.add_argument(
-        "--publication-action", choices=("commit",), default=None
+        "--publication-action", choices=("commit", "draft-pr"), default=None
     )
     create.add_argument("--publication-source-issue", type=int)
     create.add_argument("--dry-run", action="store_true")
@@ -422,7 +436,9 @@ def main() -> int:
     root = Path(args.root).resolve()
     runtime = initialize(args.state_root)
     try:
-        projects = read_registry(root)
+        projects = read_registry(
+            root, selected_project=args.project if args.command == "create" else None
+        )
         if args.command == "projects":
             emit([
                 {
@@ -501,6 +517,27 @@ def main() -> int:
                         "Publication-Repository",
                         "stvelikiy-star/ai-prof-control-center",
                     ),
+                ]
+            elif publication_action == "draft-pr":
+                if (
+                    args.project != "ai-prof-control-center"
+                    or args.execution_mode != "code"
+                    or args.operation_profile
+                    or base_branch != "maintenance/base"
+                    or args.publication_source_issue is not None
+                    or not re.fullmatch(r"feature/telegram-[0-9a-f]{8}-[0-9a-f]{12}", args.work_branch)
+                    or project.get("allow_commits") is not True
+                    or any(project.get(flag) is not False for flag in (
+                        "allow_push", "allow_merge", "allow_deployment"
+                    ))
+                    or scope != sorted(set(scope))
+                ):
+                    raise IntakeError("draft PR is outside owner-only AI PROF authority")
+                publication_metadata = [
+                    ("Publication-Contract-Version", "4"),
+                    ("Publication-Action", "draft-pr"),
+                    ("Publication-Source", "telegram-owner"),
+                    ("Publication-Repository", "stvelikiy-star/ai-prof-control-center"),
                 ]
             elif args.publication_source_issue is not None:
                 raise IntakeError(

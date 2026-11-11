@@ -10,6 +10,8 @@ from __future__ import annotations
 import github_task_gateway as gateway
 import github_task_gateway_service as established
 import kol_publication_contract_v4 as kol_v4
+import gateway_autonomous_intake as autonomous
+import atomic_route_guard as route
 import submit_task as submit
 
 
@@ -25,6 +27,24 @@ def process_kol_v4_issue(issue: dict, issues_state: dict) -> bool:
     if isinstance(existing, dict):
         if existing.get("task_id"):
             _mark_v4_record(existing)
+            task_id = existing["task_id"]
+            state, _reason = gateway.task_public_state(task_id)
+            if state == "not found":
+                # Fail closed: the gateway remembered an imported task but its
+                # queue artifact no longer exists. Never create a duplicate.
+                if existing.get("status") == "orphaned":
+                    return False
+                gateway.post_comment(
+                    number,
+                    "AI PROF: нарушение целостности очереди. Ранее принятое "
+                    f"задание {gateway.sanitize(task_id, 160)} отсутствует. "
+                    "Автоматическое повторное создание запрещено. "
+                    "Проверьте историю и восстановление очереди.",
+                )
+                existing["status"] = "orphaned"
+                existing["last_reported_state"] = "not found"
+                existing["last_reported_reason"] = ""
+                return True
             return gateway.report_task_state(number, existing)
         return False
 
@@ -74,6 +94,8 @@ def install_runtime_adapters() -> None:
     prior_process_issue = gateway.process_issue
 
     def process_issue(issue: dict, issues_state: dict) -> bool:
+        if autonomous.is_autonomous(issue):
+            return autonomous.process(issue, issues_state)
         if kol_v4.is_v4_issue(issue):
             return process_kol_v4_issue(issue, issues_state)
         return prior_process_issue(issue, issues_state)
@@ -83,6 +105,25 @@ def install_runtime_adapters() -> None:
 
 def main() -> int:
     install_runtime_adapters()
+    # Pin at process startup, not per poll: modifying source files while an
+    # old Gateway runs cannot forge an attestation for new loaded code.
+    pinned_code_digest = route.code_digest()
+    prior_poll_once = gateway.poll_once
+
+    def attested_poll_once() -> int:
+        try:
+            route.attest_gateway(start_digest=pinned_code_digest)
+        except route.RouteError as exc:
+            raise gateway.GatewayError('gateway route attestation unavailable') from exc
+        result=prior_poll_once()
+        # The base poll only visits open Issues; verify terminal records for
+        # previously closed owner Issues without posting comments or replaying.
+        state=gateway.load_state()
+        if autonomous.reconcile_closed_terminal(state['issues']):
+            gateway.save_state(state)
+        return result
+
+    gateway.poll_once = attested_poll_once
     return gateway.main()
 
 

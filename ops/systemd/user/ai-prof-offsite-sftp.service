@@ -1,0 +1,15 @@
+[Unit]
+Description=AI PROF encrypted offsite SFTP backup, with independent download verification
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/agent/projects/ai-prof-control-center/scripts/run_ai_prof_offsite_20261109.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=5min

@@ -133,8 +133,12 @@ class SelfMaintenanceProfileTests(unittest.TestCase):
         self.assertIn("OWNER_ACTION_REQUIRED", gate_source)
         self.assertIn("import subprocess", gate_source)
         self.assertIn('"update-ref"', gate_source)
-        self.assertNotIn('["gh"', gate_source)
-        self.assertNotIn('"push"', gate_source)
+        # Owner-authenticated Telegram tasks can publish a verified Draft PR;
+        # the original issue-sourced V3 commit-only path remains restricted.
+        self.assertIn('_publish_verified_owner_draft', gate_source)
+        self.assertIn('"--draft"', gate_source)
+        self.assertNotIn('"merge"', gate_source)
+        self.assertNotIn('"deploy"', gate_source)
         self.assertNotIn("approved_task_publisher_gate import", gate_source)
         self.assertNotIn("ak_bermet_approved_task_publisher_gate import", gate_source)
 

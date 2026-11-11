@@ -197,9 +197,9 @@ class AIProfCommitOnlyGateTests(unittest.TestCase):
 
     def test_execution_uses_no_network_publication_or_shell(self):
         source = Path(gate.__file__).read_text(encoding="utf-8")
-        self.assertNotIn('["gh"', source)
-        self.assertNotIn('"push"', source)
+        self.assertIn('_publish_verified_owner_draft', source)
         self.assertNotIn('"merge"', source)
+        self.assertNotIn('"deploy"', source)
         self.assertNotIn("shell=True", source)
         self.assertIn('"update-ref"', source)
 
@@ -228,8 +228,9 @@ class AIProfCommitOnlyGateTests(unittest.TestCase):
                 commit.return_value = "c" * 40
                 with mock.patch.object(
                     gate, "_repository_base_sha", return_value="a" * 40
-                ):
+                ), mock.patch.object(gate, "_publish_verified_owner_draft") as publish:
                     decision = gate.run_once(root, state)
+                    publish.assert_not_called()
                 self.assertEqual(decision.decision, "COMMITTED")
                 self.assertFalse(decision.published)
                 self.assertFalse(decision.complete)

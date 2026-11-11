@@ -43,6 +43,7 @@ class SubmitTaskTests(unittest.TestCase):
         self.assertEqual(projects["ai-prof-pilot"], {
             "project_id": "ai-prof-pilot",
             "path": "/home/agent/projects/ai-prof-pilot-runtime",
+            "enabled": False,
             "base_branch": "develop",
             "work_prefixes": ["feature/", "fix/"],
             "allowed_scope": ["README.md", "docs/**", "tests/**"],
@@ -76,8 +77,8 @@ class SubmitTaskTests(unittest.TestCase):
         project = next(
             item for item in registry["projects"] if item["project_id"] == "ak-bermet"
         ).copy()
-        # Keep the real npm script validation: use an isolated package fixture
-        # rather than requiring the unrelated AK BERMET checkout on this host.
+        # Keep npm script validation in an isolated fixture. The unrelated
+        # AK BERMET checkout need not exist on this Ubuntu host.
         with tempfile.TemporaryDirectory() as tmp:
             project["path"] = tmp
             (Path(tmp) / "package.json").write_text(
@@ -161,6 +162,40 @@ class SubmitTaskTests(unittest.TestCase):
             item = projects["pilot"]
             for key in ("allow_commits", "allow_push", "allow_merge", "allow_deployment"):
                 self.assertIs(item[key], False)
+
+    def test_selected_project_intake_survives_unrelated_missing_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, _project = self.make_root(Path(tmp))
+            registry_path = root / "orchestrator/projects.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            offline = dict(registry["projects"][0])
+            offline["project_id"] = "offline"
+            offline["path"] = str(Path(tmp) / "removed-project")
+            registry["projects"].append(offline)
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            selected = submit.read_registry(root, selected_project="pilot")
+            self.assertEqual(set(selected), {"pilot", "offline"})
+            with self.assertRaisesRegex(submit.IntakeError, "project unavailable: offline"):
+                submit.read_registry(root)
+            with self.assertRaisesRegex(submit.IntakeError, "project unavailable: offline"):
+                submit.read_registry(root, selected_project="offline")
+
+    def test_selected_project_must_be_enabled_and_not_symlinked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, project = self.make_root(Path(tmp))
+            registry_path = root / "orchestrator/projects.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            registry["projects"][0]["enabled"] = False
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with self.assertRaisesRegex(submit.IntakeError, "project is disabled: pilot"):
+                submit.read_registry(root, selected_project="pilot")
+            registry["projects"][0]["enabled"] = True
+            alias = Path(tmp) / "alias"
+            alias.symlink_to(project, target_is_directory=True)
+            registry["projects"][0]["path"] = str(alias)
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with self.assertRaisesRegex(submit.IntakeError, "symlink"):
+                submit.read_registry(root, selected_project="pilot")
 
     def test_scope_security_rejections(self):
         with tempfile.TemporaryDirectory() as tmp:
