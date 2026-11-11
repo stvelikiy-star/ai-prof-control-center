@@ -125,7 +125,10 @@ def task_details(task_id: str) -> str:
     if reason:
         lines.append(f"Reason: {html.escape(reason)}")
     draft_pr_url = _verified_draft_pr_url(fields.get("Draft-PR"))
-    if state == "completed" and draft_pr_url:
+    # Completed queue maps to public state "passed" (not "completed").
+    # Require one authoritative terminal record so a stale/duplicate queue
+    # cannot present an unverified publication as a successful result.
+    if queue == "completed" and state == "passed" and len(locations) == 1 and draft_pr_url:
         lines.append(f"Draft-PR: {html.escape(draft_pr_url)}")
     if len(locations) > 1:
         lines.append("WARNING: QUEUE INCONSISTENCY — same task exists in multiple queues")

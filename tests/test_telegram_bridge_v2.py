@@ -165,6 +165,21 @@ class TelegramBridgeV2Tests(unittest.TestCase):
             self.assertEqual(v2.task_details(value), "Invalid Task-ID.")
             self.assertEqual(v2.task_logs(value), "Invalid Task-ID.")
 
+    def test_passed_queue_with_duplicate_record_hides_pr(self):
+        task_id = "AI_PROF_20261111T065054Z_9406DB"
+        locations = [
+            ("completed", Path("task.md"), {"Goal": "Task", "Draft-PR":
+                "https://github.com/stvelikiy-star/ai-prof-control-center/pull/234"}),
+            ("approved", Path("duplicate.md"), {"Goal": "Task"}),
+        ]
+        with mock.patch.object(v2, "_task_locations", return_value=locations), \
+             mock.patch.object(v2, "_projects", return_value={}), \
+             mock.patch.object(legacy, "authoritative_task_state", return_value="QUEUE INCONSISTENCY"), \
+             mock.patch.object(legacy, "_terminal_reason", return_value=""):
+            output = v2.task_details(task_id)
+        self.assertNotIn("Draft-PR:", output)
+        self.assertIn("QUEUE INCONSISTENCY", output)
+
     def test_completed_task_details_show_exact_verified_draft_pr(self):
         task_id = "AI_PROF_20261111T065054Z_9406DB"
         draft_pr = "https://github.com/stvelikiy-star/ai-prof-control-center/pull/123"
@@ -177,7 +192,7 @@ class TelegramBridgeV2Tests(unittest.TestCase):
              mock.patch.object(v2, "_projects", return_value={
                  "control-center": {"path": "/tmp/control-center"}
              }), \
-             mock.patch.object(legacy, "authoritative_task_state", return_value="completed"), \
+             mock.patch.object(legacy, "authoritative_task_state", return_value="passed"), \
              mock.patch.object(legacy, "_terminal_reason", return_value=""):
             text = v2.task_details(task_id)
         self.assertIn(f"Draft-PR: {draft_pr}", text)
@@ -202,7 +217,7 @@ class TelegramBridgeV2Tests(unittest.TestCase):
                 })]
                 with mock.patch.object(v2, "_task_locations", return_value=locations), \
                      mock.patch.object(v2, "_projects", return_value={}), \
-                     mock.patch.object(legacy, "authoritative_task_state", return_value="completed"), \
+                     mock.patch.object(legacy, "authoritative_task_state", return_value="passed"), \
                      mock.patch.object(legacy, "_terminal_reason", return_value=""):
                     text = v2.task_details(task_id)
                 self.assertNotIn("Draft-PR:", text)
