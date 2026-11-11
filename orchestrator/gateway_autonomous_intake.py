@@ -14,6 +14,7 @@ import re
 import tempfile
 
 import github_task_gateway as gateway
+import atomic_route_guard as route
 
 PREFIX = "[AI-PROF-AUTO] "
 MARKER = "AI-PROF-AUTO-V1\n"
@@ -202,7 +203,7 @@ def report_existing(issue: dict, record: dict) -> bool:
     return True
 
 
-def process(issue: dict, issues_state: dict) -> bool:
+def _process_when_authorized_route(issue: dict, issues_state: dict) -> bool:
     number = gateway.issue_number(issue)
     key = str(number)
     if key in issues_state:
@@ -242,3 +243,17 @@ def process(issue: dict, issues_state: dict) -> bool:
         "contract_sha256": record["owner_issue_sha256"],
     }
     return True
+
+
+def process(issue: dict, issues_state: dict) -> bool:
+    """A single route gate serializes GitHub intake with a future cutover.
+
+    Frozen means DEFER, not reject: do not record this issue as terminal.
+    """
+    try:
+        with route.gate():
+            if not route.permitted():
+                return False
+            return _process_when_authorized_route(issue, issues_state)
+    except route.RouteError as exc:
+        raise AutoIntakeError('autonomous routing cannot be verified') from exc

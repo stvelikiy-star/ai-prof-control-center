@@ -24,6 +24,7 @@ import gateway_autonomous_intake as intake
 import github_task_gateway as gateway
 import pilot_issue_e2e as core
 import global_agent_admission as admission
+import atomic_route_guard as route
 
 RUN_LOCK = gateway.STATE_ROOT / "run" / "autonomous-shared-queue.lock"
 PILOT_ROOT = Path("/home/agent/projects")
@@ -329,6 +330,15 @@ def safe_codex_launch_gate(proc_root: Path = Path("/proc")) -> tuple[bool, str]:
 
 
 def tick() -> str:
+    # The systemd entrypoint already holds RUN_LOCK for the complete tick.
+    # Acquiring the same route gate as the Gateway ensures freeze cannot land
+    # between its decision to start and the future cutover lock acquisition.
+    try:
+        with route.gate():
+            if not route.permitted():
+                return "RESOURCE_DEFERRED_ROUTE_FROZEN"
+    except route.RouteError:
+        return "RESOURCE_DEFERRED_ROUTE_UNVERIFIED"
     root = intake.QUEUE_ROOT
     active = sorted((root / "autonomous_active").glob("*.json"))
     if len(active) > 1:
