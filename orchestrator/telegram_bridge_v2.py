@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_ROOT = legacy.STATE_DIR
 PROJECTS_PATH = legacy.PROJECTS_PATH
 TASK_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{5,159}$")
+DRAFT_PR_URL_RE = re.compile(
+    r"\Ahttps://github\.com/stvelikiy-star/ai-prof-control-center/pull/[1-9][0-9]*\Z"
+)
 MAX_LINES = 70
 MAX_LOG_CHARS = 9000
 
@@ -91,6 +94,13 @@ def _task_locations(task_id: str):
     return legacy._queue_locations(STATE_ROOT).get(task_id, [])
 
 
+def _verified_draft_pr_url(value: object) -> str:
+    """Return only an exact URL for this repository's numbered pull requests."""
+    if isinstance(value, str) and DRAFT_PR_URL_RE.fullmatch(value):
+        return value
+    return ""
+
+
 def task_details(task_id: str) -> str:
     if not TASK_ID_RE.fullmatch(task_id):
         return "Invalid Task-ID."
@@ -99,11 +109,12 @@ def task_details(task_id: str) -> str:
         return f"Task not found: {html.escape(task_id)}"
     queues = sorted({q for q, _p, _f in locations})
     queue, path, fields = locations[0]
+    state = legacy.authoritative_task_state(STATE_ROOT, task_id)
     lines = [
         "AI PROF task",
         f"Task-ID: {html.escape(task_id)}",
         f"Queue: {html.escape(', '.join(queues))}",
-        f"State: {html.escape(legacy.authoritative_task_state(STATE_ROOT, task_id))}",
+        f"State: {html.escape(state)}",
         f"Goal: {html.escape(_sanitize(fields.get('Goal', 'untitled'), 240))}",
     ]
     project_path = fields.get("Project-Path", "")
@@ -113,6 +124,9 @@ def task_details(task_id: str) -> str:
     reason = legacy._terminal_reason(queue, fields)
     if reason:
         lines.append(f"Reason: {html.escape(reason)}")
+    draft_pr_url = _verified_draft_pr_url(fields.get("Draft-PR"))
+    if state == "completed" and draft_pr_url:
+        lines.append(f"Draft-PR: {html.escape(draft_pr_url)}")
     if len(locations) > 1:
         lines.append("WARNING: QUEUE INCONSISTENCY — same task exists in multiple queues")
     lines.append(f"File: {html.escape(path.name)}")
