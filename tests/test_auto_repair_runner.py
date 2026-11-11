@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import sys
 from pathlib import Path
+from unittest import mock
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "orchestrator" / "auto_repair_runner.py"
 SPEC = importlib.util.spec_from_file_location('ai_prof_auto_repair_test', MODULE_PATH)
@@ -119,6 +120,71 @@ class AutoRepairRunnerTests(unittest.TestCase):
             self.assertIsNotNone(found)
             self.assertEqual(found[0], old)
             self.assertEqual(found[1].group(1), 'npm run test:inspection')
+
+    def _failed_check_fixture(self, project: Path, runtime: Path):
+        paths = runner.build_paths(project, runtime)
+        subprocess.run(['git', 'switch', '-q', '-c', 'feature/agent-repair'],
+                       cwd=project, check=True)
+        task_id = 'AI_PROF_BASELINE_FAILURE_TEST'
+        task = paths.failed / f'{task_id}.md'
+        task.write_text(
+            f'Task-ID: {task_id}\nProject-Path: {project}\n'
+            'Base-Branch: main\nWork-Branch: feature/agent-repair\n'
+            'Scope-Files: src/tracked.txt\n'
+            'Required-Checks: python3 -m unittest\n'
+            'Codex-Review-Attempt: 1\n', encoding='utf-8'
+        )
+        (project / 'src/tracked.txt').write_text('candidate\n', encoding='utf-8')
+        (paths.logs / f'{task_id}-01B-20261111T000000Z.log').write_text(
+            'CODEX_STAGE01B_FAILED\n'
+            'CodexExecutionError: check failed: python3 -m unittest\n',
+            encoding='utf-8',
+        )
+        return paths, task
+
+    def test_baseline_failure_blocks_repeat_and_preserves_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'project'
+            project.mkdir()
+            project = self._git_repo(project)
+            paths, task = self._failed_check_fixture(project, root / 'state')
+            with mock.patch.object(runner, 'run_check', side_effect=[
+                (1, 'candidate failure'), (1, 'baseline failure: missing fixture')
+            ]) as check:
+                self.assertTrue(runner.recover_check_failure(paths, task, 5))
+                self.assertTrue(task.exists())
+                self.assertFalse((paths.review / task.name).exists())
+                self.assertEqual(runner.review_attempt(task.read_text()), 1)
+                self.assertIn('baseline-check-failed; no retry scheduled', task.read_text())
+                self.assertIn('baseline failure: missing fixture', task.read_text())
+                self.assertEqual((project / 'src/tracked.txt').read_text(), 'base\n')
+                self.assertEqual(runner.dirty_paths(project), set())
+                self.assertEqual(check.call_count, 2)
+                self.assertTrue(any(paths.backups.iterdir()))
+            # After the first stop, nothing is dirty and it cannot be queued.
+            with mock.patch.object(runner, 'run_check') as check:
+                self.assertFalse(runner.recover_check_failure(paths, task, 5))
+                check.assert_not_called()
+
+    def test_green_baseline_continues_one_bounded_repair_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'project'
+            project.mkdir()
+            project = self._git_repo(project)
+            paths, task = self._failed_check_fixture(project, root / 'state')
+            with mock.patch.object(runner, 'run_check', side_effect=[
+                (1, 'candidate failed'), (0, 'baseline passed')
+            ]) as check:
+                self.assertTrue(runner.recover_check_failure(paths, task, 5))
+                self.assertFalse(task.exists())
+                review = paths.review / task.name
+                self.assertTrue(review.exists())
+                self.assertEqual(runner.review_attempt(review.read_text()), 2)
+                self.assertIn('candidate failed', review.read_text())
+                self.assertEqual(runner.dirty_paths(project), set())
+                self.assertEqual(check.call_count, 2)
 
     def test_legacy_ak_bermet_check_is_normalized(self):
         text = (

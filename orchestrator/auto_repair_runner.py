@@ -553,6 +553,33 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     returncode, output = run_check(project, argv)
     restore_task_scope_to_head(project, scope)
 
+    # A failure that reproduces on clean HEAD is not caused by the scoped
+    # implementation candidate. Re-running Codex cannot repair an unrelated
+    # baseline failure and needlessly consumes retries and host resources.
+    # Keep the failed task and all evidence intact; only owner/infrastructure
+    # repair may make this task eligible for a later explicit recovery.
+    baseline_returncode, baseline_output = run_check(project, argv)
+    if baseline_returncode != 0:
+        feedback = "\n".join([
+            "- Automatic-Repair-Outcome: baseline-check-failed; no retry scheduled.",
+            f"- Failed-Required-Check: `{command}`",
+            f"- Candidate-Check-Exit-Code: {returncode}",
+            f"- Baseline-Check-Exit-Code: {baseline_returncode}",
+            "- The check still fails on clean HEAD without the candidate changes.",
+            "- The failed implementation candidate and original logs were backed up.",
+            "- Task stays failed; an infrastructure/baseline fix is required.",
+            "- Baseline diagnostic output follows:",
+            "```text",
+            baseline_output.rstrip() or "(no output)",
+            "```",
+        ])
+        atomic_write(task, set_auto_feedback(task_text, feedback))
+        print("AUTO_REPAIR_BASELINE_CHECK_FAILED_NO_RETRY")
+        print(f"task_id={task_id}")
+        print(f"failed_check={command}")
+        print(f"backup={backup}")
+        return True
+
     feedback = "\n".join([
         f"- Automatic-Repair-Cycle: {next_attempt}/{max_cycles}",
         f"- Failed-Required-Check: `{command}`",
