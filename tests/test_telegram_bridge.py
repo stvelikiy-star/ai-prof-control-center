@@ -71,6 +71,43 @@ class TelegramBridgeTests(unittest.TestCase):
             self.assertNotIn("must-not-appear", status)
             self.assertNotIn("218.json", status)
 
+    def test_fifo_counts_separate_from_legacy_without_task_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);base=root/'queue'
+            for label in ('autonomous_pending','autonomous_active',
+                          'autonomous_completed','autonomous_blocked'):
+                (base/label).mkdir(parents=True,exist_ok=True)
+            (base/'autonomous_completed'/'AI_PROF_AUTO_MAIN_900.json').write_text('{}')
+            fifo=base/'global-agent-fifo-v1'
+            for label in ('pending','active','completed','blocked'):
+                (fifo/label).mkdir(parents=True)
+            (fifo/'completed'/'000000000001-aaaaaaaaaaaaaaaa.json').write_text(
+                '{"secret":"must-not-be-shown"}')
+            status=bridge.status_message(root,{})
+            self.assertIn('Автономная очередь: ожидает 0, в работе 0, завершено 1, заблокировано 0',status)
+            self.assertIn('FIFO (отдельный учёт): ожидает 0, в работе 0, завершено 1, заблокировано 0',status)
+            self.assertNotIn('must-not-be-shown',status)
+            self.assertNotIn('000000000001-',status)
+
+    def test_fifo_uninitialized_explicitly_not_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: не активирована')
+
+    def test_fifo_symlink_and_invalid_files_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary)/'queue';base.mkdir()
+            (base/'global-agent-fifo-v1').symlink_to(base)
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: недоступна')
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary)/'queue'/'global-agent-fifo-v1'
+            for label in ('pending','active','completed','blocked'):
+                (base/label).mkdir(parents=True,exist_ok=True)
+            (base/'pending'/'wrong.json').write_text('{}')
+            self.assertEqual(bridge.fifo_queue_status(Path(temporary)),
+                             'FIFO: недоступна')
+
     def test_missing_queue_does_not_claim_empty_success(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.assertIn("Автономная очередь: недоступна",

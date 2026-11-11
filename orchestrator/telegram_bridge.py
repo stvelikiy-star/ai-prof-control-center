@@ -276,12 +276,45 @@ def autonomous_queue_status(state_root: Path) -> str:
             f"заблокировано {counts['autonomous_blocked']}")
 
 
+def fifo_queue_status(state_root: Path) -> str:
+    """Separate FIFO counters to avoid double-counting legacy evidence.
+
+    Report absence as not enabled; never read ticket contents or secrets.
+    """
+    root=state_root / 'queue' / 'global-agent-fifo-v1'
+    if not root.exists() and not root.is_symlink():
+        return 'FIFO: не активирована'
+    names=('pending','active','completed','blocked')
+    try:
+        if root.is_symlink() or not root.is_dir():
+            return 'FIFO: недоступна'
+        counts={}
+        for name in names:
+            folder=root/name
+            if folder.is_symlink() or not folder.is_dir():
+                return 'FIFO: недоступна'
+            entries=list(folder.iterdir())
+            if len(entries)>1000 or any(
+                entry.is_symlink() or not entry.is_file()
+                or not re.fullmatch(r'[0-9]{12}-[0-9a-f]{16}\.json',entry.name)
+                for entry in entries
+            ):
+                return 'FIFO: недоступна'
+            counts[name]=len(entries)
+        return ('FIFO (отдельный учёт): '
+                f"ожидает {counts['pending']}, в работе {counts['active']}, "
+                f"завершено {counts['completed']}, заблокировано {counts['blocked']}")
+    except (OSError,ValueError):
+        return 'FIFO: недоступна'
+
+
 def status_message(state_root: Path, projects: dict[str, dict]) -> str:
     lines = [
         "AI PROF status",
         "Bridge: healthy (responding)",
         f"Control Center: {control_center_health(state_root)}",
         autonomous_queue_status(state_root),
+        fifo_queue_status(state_root),
     ]
     tasks = recent_tasks(state_root, projects)
     if not tasks:

@@ -115,7 +115,13 @@ def main() -> int:
             route.attest_gateway(start_digest=pinned_code_digest)
         except route.RouteError as exc:
             raise gateway.GatewayError('gateway route attestation unavailable') from exc
-        return prior_poll_once()
+        result=prior_poll_once()
+        # The base poll only visits open Issues; verify terminal records for
+        # previously closed owner Issues without posting comments or replaying.
+        state=gateway.load_state()
+        if autonomous.reconcile_closed_terminal(state['issues']):
+            gateway.save_state(state)
+        return result
 
     gateway.poll_once = attested_poll_once
     return gateway.main()

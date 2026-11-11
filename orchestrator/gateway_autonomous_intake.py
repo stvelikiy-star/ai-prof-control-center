@@ -203,6 +203,64 @@ def report_existing(issue: dict, record: dict) -> bool:
     return True
 
 
+def reconcile_closed_terminal(issues_state: dict) -> bool:
+    """Reconcile only locally terminal owner tasks missed by open-Issue polling.
+
+    The GitHub Issue is read-only; no issue is reopened, commented on, queued
+    or executed. A closed Issue cannot be used to authorize new work.
+    """
+    changed=False
+    for key, record in list(issues_state.items()):
+        if (not isinstance(record,dict) or record.get('kind') != RECORD_MARKER
+                or record.get('status') not in (
+                    'autonomous_queued','autonomous_fifo_queued','autonomous_fifo_waiting')):
+            continue
+        try:
+            number=int(key)
+            if str(number)!=key or number<1:
+                continue
+            locations=locate(number)
+            if len(locations)!=1 or locations[0].parent.name not in (
+                    'autonomous_completed','autonomous_blocked'):
+                continue
+            path=locations[0]
+            if path.is_symlink() or path.stat().st_size > MAX_RECORD_BYTES:
+                continue
+            saved=json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(saved,dict) or saved.get('kind')!=RECORD_MARKER:
+                continue
+            if (saved.get('main_issue')!=number
+                    or record.get('contract_sha256')!=saved.get('owner_issue_sha256')):
+                continue
+            issue=gateway.run_gh([
+                'api','-X','GET',f'repos/{gateway.REPOSITORY}/issues/{number}'
+            ],timeout=40)
+            if not isinstance(issue,dict) or issue.get('state')!='closed':
+                continue
+            # validate_contract is deliberately open-only. Use an in-memory
+            # copy to verify the original identity, exact title/body/profile;
+            # never change the remote Issue or permit an execution from it.
+            original=dict(issue,state='open')
+            verified=validate_contract(original)
+            if any(saved.get(k)!=v for k,v in verified.items()):
+                continue
+            if path.parent.name=='autonomous_completed':
+                # No success claim without independent remote PR proof.
+                import autonomous_shared_queue_worker as consumer
+                if not consumer.verify_published(verified):
+                    continue
+                status='autonomous_completed'
+            else:
+                status='autonomous_blocked'
+            record['status']=status
+            record['result_reported']=False  # closed Issue: no comment posted
+            changed=True
+        except (AutoIntakeError,gateway.GatewayError,OSError,ValueError,
+                KeyError,TypeError,UnicodeError):
+            continue
+    return changed
+
+
 def _process_when_authorized_route(issue: dict, issues_state: dict) -> bool:
     number = gateway.issue_number(issue)
     key = str(number)

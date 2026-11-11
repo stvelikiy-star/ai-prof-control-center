@@ -62,6 +62,17 @@ def process_issue(issue: dict, issues_state: dict) -> bool:
         if not isinstance(record,dict) or record.get('status')!='autonomous_queued':
             return changed
     record=issues_state[key]
+    # The worker writes terminal ledger entries independently of the Gateway.
+    # Reconcile those first, before attempting to re-stage a pending ticket;
+    # otherwise a completed task remains permanently fifo_queued/waiting.
+    if record.get('status') in ('autonomous_queued','autonomous_fifo_queued',
+                                'autonomous_fifo_waiting'):
+        locations=intake.locate(number)
+        if len(locations)>1:
+            raise RuntimeErrorSafe('ambiguous legacy terminal records')
+        if len(locations)==1 and locations[0].parent.name in (
+                'autonomous_completed','autonomous_blocked'):
+            return intake.report_existing(issue,record)
     task_id=_task_id(issue)
     try:
         _stage(task_id)
