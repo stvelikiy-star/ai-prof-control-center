@@ -75,10 +75,21 @@ class SubmitTaskTests(unittest.TestCase):
         )
         project = next(
             item for item in registry["projects"] if item["project_id"] == "ak-bermet"
-        )
-        text = submit.render_task(
-            project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
-        )
+        ).copy()
+        # Keep the real npm script validation: use an isolated package fixture
+        # rather than requiring the unrelated AK BERMET checkout on this host.
+        with tempfile.TemporaryDirectory() as tmp:
+            project["path"] = tmp
+            (Path(tmp) / "package.json").write_text(
+                json.dumps({"scripts": {
+                    "lint": "eslint .",
+                    "test:inspection": "node --test",
+                    "build": "next build",
+                }}), encoding="utf-8",
+            )
+            text = submit.render_task(
+                project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
+            )
         self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
         self.assertIn(
             "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
