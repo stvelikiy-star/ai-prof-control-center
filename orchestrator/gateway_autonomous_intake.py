@@ -256,6 +256,8 @@ def process(issue: dict, issues_state: dict) -> bool:
             if selected == 'frozen':
                 return False
             if selected == 'fifo':
+                if not route.verify_gateway_attested():
+                    raise route.RouteError('FIFO Gateway runtime attestation expired')
                 import global_fifo_owner_runtime as fifo_runtime
                 return fifo_runtime.process_issue(issue, issues_state)
             if selected == 'legacy':

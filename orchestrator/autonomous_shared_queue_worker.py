@@ -343,6 +343,8 @@ def tick() -> str:
     except route.RouteError:
         return "RESOURCE_DEFERRED_ROUTE_UNVERIFIED"
     if selected == 'fifo':
+        if not route.verify_gateway_attested():
+            return 'RESOURCE_DEFERRED_GATEWAY_NOT_ATTESTED'
         import global_fifo_owner_runtime as fifo_runtime
         return fifo_runtime.tick()
     root = intake.QUEUE_ROOT

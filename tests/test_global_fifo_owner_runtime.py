@@ -34,12 +34,14 @@ class OwnerFIFORuntimeTests(unittest.TestCase):
             (admission,'DEFAULT_LOCK',self.run/'global.lock'),
             (route,'ROUTE_LOCK',self.run/'route.lock'),
             (route,'MODE_FILE',self.run/'route.json'),
+            (route,'ATTESTATION_FILE',self.run/'gateway-attestation.json'),
             (worker,'RUN_LOCK',self.run/'worker.lock'),
         )
         for obj,attr,value in patches:
             patcher=mock.patch.object(obj,attr,value)
             patcher.start();self.addCleanup(patcher.stop)
         route._write(route.MODE_FILE,'fifo')
+        route.attest_gateway(start_digest=route.code_digest())
         self.pending_mock=mock.patch.object(adapter,'pending_contract',return_value=self.data)
         self.pending_mock.start();self.addCleanup(self.pending_mock.stop)
         self.exec_recheck=mock.patch.object(adapter,'recheck_before_execution',return_value=self.data)
@@ -157,6 +159,13 @@ class OwnerFIFORuntimeTests(unittest.TestCase):
         with mock.patch.object(worker,'run_pilot_process') as executor:
             self.assertEqual(worker.tick(),'RESOURCE_DEFERRED_ROUTE_FROZEN')
             executor.assert_not_called()
+
+    def test_fifo_runtime_rejects_missing_gateway_attestation(self):
+        route.ATTESTATION_FILE.unlink()
+        with self.assertRaises(intake.AutoIntakeError):self.stage()
+        with mock.patch.object(worker,'run_pilot_process') as runner:
+            self.assertEqual(worker.tick(),'RESOURCE_DEFERRED_GATEWAY_NOT_ATTESTED')
+            runner.assert_not_called()
 
     def test_legacy_mode_keeps_existing_queue(self):
         route._write(route.MODE_FILE,'legacy')

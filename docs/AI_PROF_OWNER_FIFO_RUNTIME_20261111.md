@@ -12,13 +12,15 @@ An **explicit opt-in** FIFO execution route is now implemented for the existing 
 
 ## Tested
 
-- Existing route/role/queue/Telegram integration: full local suite **789/789 PASS**, including targeted 42 route + FIFO-runtime scenarios.
+- Existing route/role/queue/Telegram integration: full local suite **796/796 PASS**, including targeted route/FIFO runtime and gateway attestation scenarios.
 - Synthesized GitHub owner/pilot contracts with temporary queue roots, mocked Codex, and a real Linux global lease; successful path, failed remote proof, crash boundaries, wrong project, stale child lock, duplicate intake and owner-policy changes. No real customer job executed.
 - `git diff --check` PASS.
 
 ## Operational activation gate — not yet met
 
-**This branch MUST NOT be switched to `fifo` until both the systemd Gateway and the existing user-timer worker are independently confirmed to have loaded this exact reviewed SHA.** An outdated Gateway would bypass the new route, enabling duplicate paths.
+**This branch MUST NOT be switched to `fifo` until the systemd Gateway has restarted into this exact reviewed code.** The running Gateway now pins a SHA-256 digest of the routing, intake, worker, FIFO and attestation source files at process startup. On every poll (after the service obtains its own gateway single-flight lock) it emits a private 0600 PID/start-ticks/protocol/digest/timestamp attestation. Atomic mode transitions require this attestation to be fresh, from a currently live PID, with unchanged startup time and the exact currently installed code digest. In FIFO mode both new intake and the worker independently fail closed if the Gateway attestation expires or the code changes. The timer worker is a fresh process on each tick and is invoked from the verified installed path.
+
+An outdated Gateway cannot attest because it has no wrapper. A source update without a Gateway restart changes the installed digest but not the startup-pinned digest, therefore transitions and new FIFO work remain deferred.
 
 After CI and code-only local installation, a privileged restart of `ai-prof-github-task-gateway.service` may be needed, as the Remote Desktop Commander user cannot safely restart this system service. No unapproved forced termination or replacement polling process should be used.
 

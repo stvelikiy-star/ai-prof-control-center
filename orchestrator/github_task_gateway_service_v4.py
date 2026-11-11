@@ -11,6 +11,7 @@ import github_task_gateway as gateway
 import github_task_gateway_service as established
 import kol_publication_contract_v4 as kol_v4
 import gateway_autonomous_intake as autonomous
+import atomic_route_guard as route
 import submit_task as submit
 
 
@@ -104,6 +105,19 @@ def install_runtime_adapters() -> None:
 
 def main() -> int:
     install_runtime_adapters()
+    # Pin at process startup, not per poll: modifying source files while an
+    # old Gateway runs cannot forge an attestation for new loaded code.
+    pinned_code_digest = route.code_digest()
+    prior_poll_once = gateway.poll_once
+
+    def attested_poll_once() -> int:
+        try:
+            route.attest_gateway(start_digest=pinned_code_digest)
+        except route.RouteError as exc:
+            raise gateway.GatewayError('gateway route attestation unavailable') from exc
+        return prior_poll_once()
+
+    gateway.poll_once = attested_poll_once
     return gateway.main()
 
 

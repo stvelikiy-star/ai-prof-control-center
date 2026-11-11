@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import tempfile
 import unittest
 from unittest import mock
@@ -30,6 +31,8 @@ class RouteAtomicTests(unittest.TestCase):
         self.fifo=self.legacy/'global-agent-fifo-v1'
         p=mock.patch.object(route,'ROUTE_LOCK',self.rlock);p.start();self.addCleanup(p.stop)
         p=mock.patch.object(route,'MODE_FILE',self.mode);p.start();self.addCleanup(p.stop)
+        p=mock.patch.object(route,'ATTESTATION_FILE',self.run/'attestation.json');p.start();self.addCleanup(p.stop)
+        route.attest_gateway(start_digest=route.code_digest())
         p=mock.patch.object(intake,'QUEUE_ROOT',self.legacy);p.start();self.addCleanup(p.stop)
         p=mock.patch.object(worker,'RUN_LOCK',self.worker);p.start();self.addCleanup(p.stop)
 
@@ -38,6 +41,29 @@ class RouteAtomicTests(unittest.TestCase):
                                 worker_lock=self.worker,legacy=self.legacy,fifo=self.fifo,
                                 global_lock=self.global_lock,
                                 registry_root=Path(__file__).resolve().parents[1])
+
+    def test_missing_gateway_attestation_prevents_freeze(self):
+        route.ATTESTATION_FILE.unlink()
+        with self.assertRaises(route.RouteError):self.change('frozen')
+        self.assertFalse(self.mode.exists())
+
+    def test_stale_gateway_attestation_prevents_freeze(self):
+        state=json.loads(route.ATTESTATION_FILE.read_text())
+        state['updated_unix']=int(time.time())-1000
+        route.ATTESTATION_FILE.write_text(json.dumps(state))
+        with self.assertRaises(route.RouteError):self.change('frozen')
+
+    def test_wrong_process_start_prevents_freeze(self):
+        state=json.loads(route.ATTESTATION_FILE.read_text())
+        state['start_ticks']+=1
+        route.ATTESTATION_FILE.write_text(json.dumps(state))
+        with self.assertRaises(route.RouteError):self.change('frozen')
+
+    def test_changed_loaded_source_hash_prevents_freeze(self):
+        state=json.loads(route.ATTESTATION_FILE.read_text())
+        state['code_sha256']='0'*64
+        route.ATTESTATION_FILE.write_text(json.dumps(state))
+        with self.assertRaises(route.RouteError):self.change('frozen')
 
     def test_legacy_default_and_freeze_restore(self):
         self.assertEqual(route.mode(),'legacy')
