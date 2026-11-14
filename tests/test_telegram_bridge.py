@@ -144,6 +144,30 @@ class TelegramBridgeTests(unittest.TestCase):
         )
         self.assertEqual(bridge.parse_command("/ai task one | two"), bridge.Command("invalid"))
 
+    def test_single_part_task_limits_title_and_preserves_full_instructions(self):
+        task_text = "x" * 170
+
+        command = bridge.parse_command(f"/ai task {task_text}")
+
+        self.assertEqual(command.project, "ai-prof-control-center")
+        self.assertEqual(command.title, task_text[:120])
+        self.assertEqual(len(command.title), 120)
+        self.assertEqual(command.instructions, task_text)
+        self.assertEqual(len(command.instructions), 170)
+
+    def test_three_part_task_preserves_each_explicit_field_exactly(self):
+        project = "ai-prof-pilot"
+        title = "Exact Telegram title"
+        instructions = "Keep these explicit instructions exactly as supplied."
+
+        command = bridge.parse_command(
+            f"/ai task {project} | {title} | {instructions}"
+        )
+
+        self.assertEqual(command.project, project)
+        self.assertEqual(command.title, title)
+        self.assertEqual(command.instructions, instructions)
+
     def test_owner_telegram_draft_pr_is_limited_to_ai_prof_project(self):
         projects={
             'ai-prof-control-center':{'project_id':'ai-prof-control-center',
