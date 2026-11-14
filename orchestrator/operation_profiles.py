@@ -57,8 +57,18 @@ AK_BERMET_STAFF_AUTH_ACTIVATE_DEV = OperationProfile(
     kind="staff-auth-activate-dev",
 )
 
+KOL_READONLY_FULL_AUDIT = OperationProfile(
+    key="kol-readonly-full-audit",
+    repository=Path("/home/agent/Загрузки/kol-travel-platform"),
+    base_branch="feature/kol-ai-prof-pipeline-20261109",
+    expected_migration="",
+    kind="kol-readonly-full-audit",
+)
+
+
 PROFILES = {
     AI_PROF_CONTROL_CENTER_HEALTH_CHECK.key: AI_PROF_CONTROL_CENTER_HEALTH_CHECK,
+    KOL_READONLY_FULL_AUDIT.key: KOL_READONLY_FULL_AUDIT,
     AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
     AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
     AK_BERMET_SHEETS_MIRROR_DRY_RUN.key: AK_BERMET_SHEETS_MIRROR_DRY_RUN,

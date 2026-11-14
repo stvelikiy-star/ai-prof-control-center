@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ak_bermet_release_v6_prepare as release_v6
 import ak_bermet_sheets_mirror_dry_run as sheets_mirror
 import ak_bermet_staff_auth_activate_dev as staff_auth
+import kol_readonly_audit
 from operation_profiles import OperationProfile, resolve_profile
 from runtime_paths import DEFAULT_STATE_ROOT
 
@@ -373,7 +374,17 @@ def execute_control_center_health_check(
     )
 
 
-def execute_profile(profile: OperationProfile, requested_path: str) -> str:
+def execute_profile(profile: OperationProfile, requested_path: str,
+                    *, task_id: str | None = None) -> str:
+    if profile.kind == "kol-readonly-full-audit":
+        if (requested_path != str(profile.repository)
+                or profile.key != "kol-readonly-full-audit"
+                or task_id is None):
+            raise OperationBlocked("KÖL audit requires exact configured project and task ID")
+        try:
+            return str(kol_readonly_audit.run(task_id))
+        except kol_readonly_audit.AuditError as exc:
+            raise OperationBlocked(str(exc)) from exc
     if profile.kind == "control-center-health-check":
         return execute_control_center_health_check(profile, requested_path)
     if profile.kind == "release-v6-prepare":
@@ -504,7 +515,12 @@ def process_one(paths: orch.Paths) -> int:
             profile = resolve_profile(profile_key)
         except ValueError as exc:
             raise OperationBlocked(str(exc)) from exc
-        outcome = execute_profile(profile, data["Project-Path"])
+        if profile.kind == "kol-readonly-full-audit":
+            outcome = execute_profile(
+                profile, data["Project-Path"], task_id=data["Task-ID"]
+            )
+        else:
+            outcome = execute_profile(profile, data["Project-Path"])
         summary = (
             "PASS\n"
             f"task_id={data['Task-ID']}\n"
