@@ -52,6 +52,7 @@ TERMINAL_REASON_FIELDS = {
     "cancelled": ("Cancellation-Reason", "Cancelled-Reason", "Terminal-Reason"),
 }
 TELEGRAM_MESSAGE_LIMIT = 4096
+TASK_TITLE_LIMIT = 120
 HELP = (
     "AI PROF commands:\n"
     "/ai help\n"
@@ -448,7 +449,13 @@ def parse_command(text: object) -> Command | None:
         return Command("invalid")
     parts = [part.strip() for part in payload.split("|")]
     if len(parts) == 1:
-        return Command("task", "ai-prof-control-center", parts[0], parts[0], True)
+        return Command(
+            "task",
+            "ai-prof-control-center",
+            parts[0][:TASK_TITLE_LIMIT],
+            parts[0],
+            True,
+        )
     if len(parts) == 3 and all(parts):
         return Command("task", parts[0], parts[1], parts[2])
     return Command("invalid")
