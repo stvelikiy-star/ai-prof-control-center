@@ -100,6 +100,14 @@ class TelegramV5Tests(unittest.TestCase):
             update = self.update("/ai task ai-prof-control-center | Fix | Update README.md")
             v5.handle_update_v5(update, self.config, self.client)
             prior.assert_called_once_with(update, self.config, self.client)
+    def test_scope_guard_does_not_reject_real_edit_request(self):
+        self.assertFalse(v5.is_readonly_intent(
+            "Исправь баг", "Исправь Telegram бота, не изменяй базу данных",
+        ))
+        self.assertTrue(v5.is_readonly_intent(
+            "Аудит", "Проверь сервер, ничего не изменяй",
+        ))
+
     def test_other_project_readonly_is_not_mutated(self):
         with patch.object(legacy, "authorized", return_value=True), patch.object(
             v5, "_ORIGINAL_EXTENDED"
@@ -123,6 +131,163 @@ class TelegramV5Tests(unittest.TestCase):
             v5.handle_update_v5(value, self.config, self.client)
             report.assert_not_called()
             prior.assert_called_once()
+    def test_private_start_enables_personal_updates(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": 42, "type": "private"},
+                              "from": {"id": 42}, "text": "/start"}}
+        with patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(v5, "_enable_private_updates") as opt_in:
+            v5.handle_update_v5(update, cfg, self.client)
+        opt_in.assert_called_once()
+        self.assertIn("Задача:", self.client.messages[0])
+
+    def test_private_natural_task_uses_existing_allowlisted_intake(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": 42, "type": "private"},
+                              "from": {"id": 42},
+                              "text": "Задача: исправь вывод в orchestrator/telegram_bridge.py"}}
+        project = {"allowed_scope": ["README.md", "orchestrator/telegram_bridge.py"]}
+        with patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "load_projects", return_value={
+                 "ai-prof-control-center": project,
+             }), \
+             patch.object(legacy, "submit", return_value=("TASK_TEST", "ai-prof-control-center")) as submit:
+            v5.handle_update_v5(update, cfg, self.client)
+        self.assertIn("TASK_TEST", self.client.messages[0])
+        self.assertIn("сохранено в очереди", self.client.messages[0])
+        self.assertEqual(submit.call_count, 1)
+        submitted = submit.call_args.args[0]
+        self.assertEqual(submitted.project, "ai-prof-control-center")
+        self.assertEqual(submitted.instructions, "исправь вывод в orchestrator/telegram_bridge.py")
+
+    def test_private_ambiguous_task_requests_scope_without_mutating(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": 42, "type": "private"},
+                              "from": {"id": 42},
+                              "text": "Задача: сделай нашу систему максимально удобной"}}
+        with patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "load_projects", return_value={
+                 "ai-prof-control-center": {"allowed_scope": ["README.md", "docs/**"]},
+             }), \
+             patch.object(legacy, "submit") as submit:
+            v5.handle_update_v5(update, cfg, self.client)
+        submit.assert_not_called()
+        self.assertIn("не определил раздел", self.client.messages[0])
+
+    def test_private_impersonation_gets_no_reply_or_task(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": 42, "type": "private"},
+                              "from": {"id": 54}, "text": "Задача: исправь код"}}
+        with patch.object(v5, "_owner_client") as owner, \
+             patch.object(legacy, "submit") as submit:
+            v5.handle_update_v5(update, cfg, self.client)
+        owner.assert_not_called()
+        submit.assert_not_called()
+        self.assertEqual(self.client.messages, [])
+
+    def test_group_short_task_command_uses_existing_handler(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": -1001, "type": "group"},
+                              "from": {"id": 42}, "text": "/task Исправь справку"}}
+        with patch.object(v5, "_ORIGINAL_EXTENDED") as ext:
+            v5.handle_update_v5(update, cfg, self.client)
+        forwarded = ext.call_args.args[0]
+        self.assertEqual(forwarded["message"]["text"], "/ai task Исправь справку")
+
+    def test_private_notification_delivery_falls_back_to_group(self):
+        with tempfile.TemporaryDirectory() as root:
+            marker = Path(root)/"enabled"
+            marker.write_text("owner-started\n")
+            group = unittest.mock.Mock()
+            group.config = legacy.Config("fake", -1001, 42)
+            private = unittest.mock.Mock()
+            with patch.object(v5, "PRIVATE_ENABLED_MARKER", marker), \
+                 patch.object(v5, "_owner_client", return_value=private):
+                notifier = v5._owner_notification_client(group)
+                notifier.send("new result")
+                private.send.assert_called_once_with("new result")
+                group.send.assert_not_called()
+                private.send.side_effect = legacy.BridgeError("private revoked")
+                notifier.send("retry")
+                group.send.assert_called_once_with("retry")
+
+    def test_private_notification_opt_in_file_is_owner_started_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            marker = Path(root)/"run"/"owner-started"
+            with patch.object(v5, "PRIVATE_ENABLED_MARKER", marker):
+                v5._enable_private_updates()
+                self.assertEqual(marker.read_text(), "owner-started\n")
+                self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+
+    def test_private_conversation_confirmed_scope_is_submitted_once(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        def update(text):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": text}}
+        project = {"allowed_scope": ["README.md", "orchestrator/telegram_bridge.py"]}
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(root)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "load_projects", return_value={
+                 "ai-prof-control-center": project,
+             }), \
+             patch.object(legacy, "submit", return_value=("TASK_ACCEPTED", "ai-prof-control-center")) as submit:
+            v5.handle_update_v5(update("Задача: улучши Telegram бота и исправь ответы"), cfg, self.client)
+            self.assertIn("Запустить?", self.client.messages[-1])
+            submit.assert_not_called()
+            v5.handle_update_v5(update("Да"), cfg, self.client)
+            submit.assert_called_once()
+            cmd = submit.call_args.args[0]
+            self.assertIn("orchestrator/telegram_bridge.py", cmd.instructions)
+            self.assertIn("TASK_ACCEPTED", self.client.messages[-1])
+            v5.handle_update_v5(update("Да"), cfg, self.client)
+            submit.assert_called_once()
+
+    def test_ambiguous_conversation_accepts_short_area_then_confirmation(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        def update(text):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": text}}
+        project = {"allowed_scope": ["orchestrator/telegram_bridge.py"]}
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(root)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "load_projects", return_value={
+                 "ai-prof-control-center": project,
+             }), \
+             patch.object(legacy, "submit", return_value=("TASK_2", "ai-prof-control-center")) as submit:
+            v5.handle_update_v5(update("Задача: улучшить рабочие разделы нашей системы"), cfg, self.client)
+            self.assertIn("Что менять?", self.client.messages[-1])
+            v5.handle_update_v5(update("Telegram"), cfg, self.client)
+            self.assertIn("Запустить?", self.client.messages[-1])
+            v5.handle_update_v5(update("Да"), cfg, self.client)
+            submit.assert_called_once()
+
+    def test_proposal_expires_and_cannot_submit(self):
+        with tempfile.TemporaryDirectory() as root:
+            marker = Path(root)/"proposal.json"
+            with patch.object(v5, "OWNER_DRAFT_FILE", marker), \
+                 patch.object(v5.time, "time", return_value=200_000):
+                v5._save_proposal("исправить работу Telegram бота", "orchestrator/telegram_bridge.py")
+            with patch.object(v5, "OWNER_DRAFT_FILE", marker), \
+                 patch.object(v5.time, "time", return_value=300_000):
+                self.assertIsNone(v5._load_proposal())
+
+    def test_natural_task_other_client_project_is_rejected(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        update = {"message": {"chat": {"id": 42, "type": "private"},
+                              "from": {"id": 42},
+                              "text": "Задача: исправь MARINA в orchestrator/telegram_bridge.py"}}
+        with patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "submit") as submit:
+            v5.handle_update_v5(update, cfg, self.client)
+        submit.assert_not_called()
+        self.assertIn("только AI PROF", self.client.messages[-1])
+
+    def test_keyword_work_is_not_misrouted_as_bot(self):
+        self.assertIsNone(v5._area_choice("Задача: улучшить работу системы"))
+        self.assertEqual(v5._area_choice("Задача: исправь Telegram бота")[0], "телеграм")
+
     def test_review_pass_does_not_claim_completion(self):
         source = {"T": ("active", "ai-prof-control-center", "")}
         target = {"T": ("approved", "ai-prof-control-center", "")}

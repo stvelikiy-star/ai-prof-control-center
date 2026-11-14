@@ -36,6 +36,19 @@ class TelegramBridgeTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertFalse(bridge.authorized(message, self.config))
 
+    def test_owner_private_chat_is_allowed_but_impersonation_is_not(self):
+        owner_private = {"chat": {"id": 42, "type": "private"},
+                         "from": {"id": 42}, "text": "/start"}
+        self.assertTrue(bridge.authorized(owner_private, self.config))
+        for bad in (
+            {"chat": {"id": 42, "type": "group"}, "from": {"id": 42}},
+            {"chat": {"id": 42, "type": "private"}, "from": {"id": 43}},
+            {"chat": {"id": 43, "type": "private"}, "from": {"id": 42}},
+            {"chat": {"id": -1001, "type": "group"}, "from": {"id": 43}},
+        ):
+            with self.subTest(bad=bad):
+                self.assertFalse(bridge.authorized(bad, self.config))
+
     def test_status_includes_campaign_safety_and_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)

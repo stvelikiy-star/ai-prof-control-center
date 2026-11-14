@@ -411,8 +411,14 @@ def authorized(message: object, config: Config) -> bool:
     return (
         isinstance(chat, dict)
         and isinstance(sender, dict)
-        and chat.get("id") == config.chat_id
         and sender.get("id") == config.owner_user_id
+        and (
+            chat.get("id") == config.chat_id
+            or (
+                chat.get("id") == config.owner_user_id
+                and chat.get("type") == "private"
+            )
+        )
     )
 
 
