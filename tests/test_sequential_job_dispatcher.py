@@ -18,6 +18,25 @@ class SequentialDispatcherTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_disk_guard_accounts_for_reserved_blocks(self):
+        # used/total would admit this host at 84%; df shows 88.4% full.
+        usage = mock.Mock(total=100, used=84, free=11)
+        with mock.patch.object(q.Path, "read_text", return_value="MemAvailable: 2000000 kB\n"), \
+             mock.patch.object(q.shutil, "disk_usage", return_value=usage):
+            self.assertEqual(q.resource_gate(), (False, "DISK_ABOVE_88_PERCENT"))
+
+    def test_disk_guard_admits_available_nonreserved_capacity(self):
+        usage = mock.Mock(total=100, used=80, free=15)
+        with mock.patch.object(q.Path, "read_text", return_value="MemAvailable: 2000000 kB\n"), \
+             mock.patch.object(q.shutil, "disk_usage", return_value=usage):
+            self.assertEqual(q.resource_gate(), (True, "RESOURCES_PASS"))
+
+    def test_disk_guard_fails_closed_without_usable_capacity(self):
+        usage = mock.Mock(total=100, used=0, free=0)
+        with mock.patch.object(q.Path, "read_text", return_value="MemAvailable: 2000000 kB\n"), \
+             mock.patch.object(q.shutil, "disk_usage", return_value=usage):
+            self.assertEqual(q.resource_gate(), (False, "RESOURCES_UNVERIFIED"))
+
     def test_fixed_three_jobs_order(self):
         data = q.seed(100)
         self.assertEqual([x["kind"] for x in data["jobs"]],

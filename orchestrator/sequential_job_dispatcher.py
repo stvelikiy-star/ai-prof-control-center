@@ -91,7 +91,11 @@ def resource_gate() -> tuple[bool, str]:
         usage = shutil.disk_usage("/")
         if mem < 1500000:
             return False, "RAM_BELOW_1_5_GIB"
-        if usage.used / usage.total >= 0.88:
+        # Match df: reserved filesystem blocks are unavailable to this user.
+        usable = usage.used + usage.free
+        if usable <= 0:
+            return False, "RESOURCES_UNVERIFIED"
+        if usage.used / usable >= 0.88:
             return False, "DISK_ABOVE_88_PERCENT"
         return True, "RESOURCES_PASS"
     except (OSError, ValueError, StopIteration):
