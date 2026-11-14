@@ -4,9 +4,12 @@ from __future__ import annotations
 import re
 import os
 import json
+import sqlite3
 import time
 import tempfile
+from datetime import datetime
 from pathlib import Path
+import owner_task_scheduler as scheduler
 import telegram_bridge as legacy
 import telegram_bridge_v2 as v2
 import telegram_bridge_v4 as v4
@@ -21,7 +24,7 @@ NATURAL_AUDIT_REQUESTS = frozenset({
 _ORIGINAL_CHANGE_MESSAGES = v2.task_change_messages
 PRIVATE_ENABLED_MARKER = legacy.STATE_DIR / "run" / "owner-private-started"
 OWNER_DRAFT_FILE = legacy.STATE_DIR / "run" / "owner-task-proposal-v1.json"
-DRAFT_TTL_SECONDS = 86400
+DRAFT_TTL_SECONDS = 7 * 86400
 TASK_AREAS = {
     "телеграм": ("orchestrator/telegram_bridge.py", ("телеграм", "telegram")),
     "github": ("orchestrator/github_task_gateway.py", ("github", "гитхаб", "гитхабе")),
@@ -75,12 +78,12 @@ def _owner_notification_client(group_client):
     return OwnerNotifier()
 
 
-def _save_proposal(instructions: str, scope: str | None) -> None:
+def _save_proposal(instructions: str, scope: str | None, *, created_at: int | None = None) -> None:
     path = OWNER_DRAFT_FILE
     if path.is_symlink():
         raise legacy.BridgeError("unsafe owner proposal file")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = {"version": 1, "created": int(time.time()),
+    data = {"version": 1, "created": int(time.time()) if created_at is None else created_at,
             "instructions": instructions, "scope": scope}
     blob = json.dumps(data, ensure_ascii=False).encode("utf-8")
     if len(blob) > 5000:
@@ -144,12 +147,50 @@ def _owner_proposal_reply(text: str, client) -> bool:
     proposal = _load_proposal()
     if not proposal:
         return False
+    if simple in {"каждый час", "отчёт: каждый час", "только результат", "отчёт: только результат"}:
+        choice = "каждый час" if "каждый час" in simple else "только результат"
+        instructions = re.sub(
+            r"(?im)^\s*Отч[её]т:\s*[^\n]+$",
+            "Отчёт: " + choice, proposal["instructions"],
+        )
+        _save_proposal(instructions, proposal["scope"], created_at=proposal["created"])
+        if proposal["scope"] is None:
+            client.send("Отчёт уточнил. Теперь выберите раздел: Telegram, GitHub или очередь.")
+        else:
+            client.send("Отчёт уточнил. Время запуска сохранено. Подтверждаете расписание? Да или Нет.")
+        return True
     if simple in {"да", "подтверждаю", "запускай", "в работу"}:
         scope = proposal["scope"]
         if scope is None:
             client.send("Сначала выберите раздел: Telegram, GitHub или очередь.")
             return True
         raw = proposal["instructions"]
+        try:
+            plan = scheduler.parse_plan(
+                raw, now=datetime.fromtimestamp(proposal["created"], scheduler.TZ)
+            )
+        except scheduler.ScheduleError as exc:
+            client.send("Не могу подтвердить расписание: " + str(exc)
+                        + "\nИсправьте поля в новом сообщении или уточните «каждый час».")
+            return True
+        if plan is not None:
+            try:
+                schedule_id = scheduler.register(raw, scope, plan)
+            except (scheduler.ScheduleError, legacy.BridgeError, OSError) as exc:
+                client.send("Не получилось сохранить расписание: " + str(exc)[:220])
+                return True
+            _clear_proposal()
+            client.send(
+                f"🗓 Поручение {schedule_id} запланировано.\n"
+                f"Начало: {datetime.fromtimestamp(plan.start_at, scheduler.TZ):%d.%m.%Y %H:%M} (Бишкек).\n"
+                f"Срок: {datetime.fromtimestamp(plan.deadline_at, scheduler.TZ):%d.%m.%Y %H:%M}.\n"
+                f"Приоритет: {plan.priority} (метка, FIFO сохраняется).\n"
+                f"Отчёт: {'каждый час' if plan.report_interval else 'только результат'}.\n"
+                "Задача попадёт в штатную очередь не раньше времени начала. "
+                "Срок — контрольная отметка, не гарантия завершения. "
+                "Проверка: напишите «расписание»."
+            )
+            return True
         _clear_proposal()  # At most one submission, even if Telegram retries.
         command = legacy.Command(
             "task", "ai-prof-control-center", raw[:legacy.TASK_TITLE_LIMIT],
@@ -175,8 +216,26 @@ def _owner_proposal_reply(text: str, client) -> bool:
     area = aliases.get(simple, simple)
     if area in TASK_AREAS:
         scope = TASK_AREAS[area][0]
-        _save_proposal(proposal["instructions"], scope)
-        client.send(f"Понял, раздел: {area} ({scope}). Запустить? Ответьте «Да» или «Нет».")
+        _save_proposal(proposal["instructions"], scope, created_at=proposal["created"])
+        try:
+            plan = scheduler.parse_plan(
+                proposal["instructions"],
+                now=datetime.fromtimestamp(proposal["created"], scheduler.TZ),
+            )
+        except scheduler.ScheduleError as exc:
+            client.send("Раздел выбран. Но расписание нужно уточнить: " + str(exc))
+            return True
+        if plan:
+            client.send(
+                f"Раздел: {area} ({scope}).\n"
+                f"Начало: {datetime.fromtimestamp(plan.start_at, scheduler.TZ):%d.%m %H:%M}; "
+                f"срок: {datetime.fromtimestamp(plan.deadline_at, scheduler.TZ):%d.%m %H:%M}.\n"
+                f"Приоритет: {plan.priority} (без изменения FIFO). "
+                f"Отчёт: {'каждый час' if plan.report_interval else 'только результат'}.\n"
+                "Поставить в расписание? Ответьте «Да» или «Нет»."
+            )
+        else:
+            client.send(f"Понял, раздел: {area} ({scope}). Запустить? Ответьте «Да» или «Нет».")
         return True
     return False
 
@@ -198,6 +257,12 @@ def _natural_task(text: str, config, client) -> None:
     if re.search(r"(?<!\w)(?:marina|марина|köl|кёл|ak-bermet|ак бермет)(?!\w)", raw.casefold()):
         return client.send("В простом режиме доступен только AI PROF. "
                            "Другой проект нужно назвать явно в /ai task и отдельно разрешить.")
+    try:
+        plan = scheduler.parse_plan(raw)
+    except scheduler.ScheduleError as exc:
+        _save_proposal(raw, None)
+        return client.send("Расписание нужно уточнить: " + str(exc)
+                           + "\nПоручение сохранено. Если вы имели в виду ежечасный отчёт, ответьте «каждый час».")
     # Private natural tasks default ONLY to the owner's AI PROF project.
     # Other customer projects require explicit three-part /ai task authorization.
     command = legacy.Command("task", "ai-prof-control-center", raw[:legacy.TASK_TITLE_LIMIT], raw, True)
@@ -212,12 +277,19 @@ def _natural_task(text: str, config, client) -> None:
                 return client.send(
                     f"Понял задачу для AI PROF. Похоже, нужен раздел {suggested[0]} "
                     f"({suggested[1]}). Запустить? Ответьте «Да» или «Нет». "
-                    "Поручение сохранено до завтра."
+                    "Поручение сохранено на 7 дней, без автоматического запуска."
                 )
             return client.send(
                 "Поручение понял, но не определил раздел. Что менять? "
                 "Ответьте одним словом: Telegram, GitHub или очередь. "
-                "Затем попрошу подтвердить запуск. Поручение сохранено до завтра."
+                "Затем попрошу подтвердить запуск. Поручение сохранено на 7 дней."
+            )
+        if plan:
+            _save_proposal(raw, exact[0])
+            return client.send(
+                f"🗓 Подтвердите расписание: начало {datetime.fromtimestamp(plan.start_at, scheduler.TZ):%d.%m %H:%M}, "
+                f"срок до {datetime.fromtimestamp(plan.deadline_at, scheduler.TZ):%d.%m %H:%M}; "
+                f"раздел {exact[0]}. Ответьте «Да» или «Нет». Сейчас задача не запускается."
             )
         task_id, project_id = legacy.submit(command, projects)
         return client.send(
@@ -318,18 +390,34 @@ def handle_update_v5(update, config, client) -> None:
             return client.send(
                 "AI PROF готов ✅\nПишите обычным текстом:\n"
                 "Задача: исправь ошибку в orchestrator/telegram_bridge.py\n\n"
-                "Можете описать задачу подробно. Если неясно, где работать, "
-                "я уточню раздел и попрошу подтвердить запуск.\n\n"
-                "Статус: «статус». Список: «задачи». Справка: «помощь». "
+                "Можете описать задачу подробно, указать «Начать: завтра в 18:00», "
+                "«Срок: 4 часа», «Отчёт: каждый час». Я уточню раздел " "и попрошу подтвердить запуск.\n\n"
+                "Статус: «статус». Список: «задачи». Расписание: «расписание». Справка: «помощь». "
                 "Большие поручения выполняются последовательно; результат придёт сюда."
             )
         if simple in {"статус", "как дела", "состояние"}:
             return client.send(legacy.status_message(legacy.STATE_DIR, legacy.load_projects()))
         if simple in {"задачи", "мои задачи", "очередь"}:
             return client.send(v2.queue_message("ai-prof-control-center"))
+        if simple in {"расписание", "запланированные", "план"}:
+            return client.send(scheduler.summary())
+        cancellation = re.fullmatch(r"отмени\s+(S[0-9A-Fa-f]{12})", normalized.strip(), re.I)
+        if cancellation:
+            sid = cancellation.group(1).upper()
+            if scheduler.cancel(sid):
+                return client.send(f"✅ Запланированное поручение {sid} отменено до запуска.")
+            return client.send("Не нашёл ожидающее расписание. Запущенную задачу так не отменяю.")
         if simple in {"помощь", "как дать задачу", "команды"}:
-            return client.send("Напишите: Задача: что исправить в каком файле. "
-                               "Или /ai task <текст>. Статус: статус. Очередь: задачи.")
+            return client.send(
+                "Напишите обычным сообщением:\n"
+                "Задача: исправь Telegram-бота.\n"
+                "Начать: завтра в 18:00.\n"
+                "Срок: 4 часа.\nПриоритет: высокий.\n"
+                "Отчёт: каждый час.\n"
+                "Затем уточните раздел и ответьте «Да». "
+                "Статус: «статус», очередь: «задачи», расписание: «расписание». "
+                "Отменить до начала: «отмени S...».")
+
         if simple in {"аудит", "проверь сервер"}:
             return client.send(audit.build_report())
         if _owner_proposal_reply(normalized, client):
@@ -392,7 +480,18 @@ def main() -> int:
         return old_send(client, legacy._telegram_truncate(localize(message)))
     legacy.TelegramClient.send = send_in_russian
     def private_first_watch(client, *, poll_seconds=30):
-        return watch_task_changes_v6(_owner_notification_client(client), poll_seconds=poll_seconds)
+        from telegram_bridge_v6 import notify_once, DeliveryStateError
+        notifier = _owner_notification_client(client)
+        while True:
+            try:
+                notify_once(notifier)
+            except (legacy.BridgeError, OSError, ValueError, DeliveryStateError) as exc:
+                legacy.logging.warning("owner notification retry: %s", type(exc).__name__)
+            try:
+                scheduler.tick(notifier)
+            except (OSError, ValueError, sqlite3.Error, scheduler.ScheduleError) as exc:
+                legacy.logging.warning("owner schedule retry: %s", type(exc).__name__)
+            time.sleep(poll_seconds)
     v2.watch_task_changes = private_first_watch
     v2.extended_handle_update = handle_update_v5
     v2.task_change_messages = task_change_messages_v5

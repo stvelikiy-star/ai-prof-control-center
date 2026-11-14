@@ -2,6 +2,7 @@
 from __future__ import annotations
 import sys
 import tempfile
+from datetime import datetime
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -270,7 +271,7 @@ class TelegramV5Tests(unittest.TestCase):
                  patch.object(v5.time, "time", return_value=200_000):
                 v5._save_proposal("исправить работу Telegram бота", "orchestrator/telegram_bridge.py")
             with patch.object(v5, "OWNER_DRAFT_FILE", marker), \
-                 patch.object(v5.time, "time", return_value=300_000):
+                 patch.object(v5.time, "time", return_value=900_000):
                 self.assertIsNone(v5._load_proposal())
 
     def test_natural_task_other_client_project_is_rejected(self):
@@ -287,6 +288,97 @@ class TelegramV5Tests(unittest.TestCase):
     def test_keyword_work_is_not_misrouted_as_bot(self):
         self.assertIsNone(v5._area_choice("Задача: улучшить работу системы"))
         self.assertEqual(v5._area_choice("Задача: исправь Telegram бота")[0], "телеграм")
+
+    def test_scheduled_natural_task_does_not_run_before_confirmation(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        text = ("Задача: исправь телеграм бота в orchestrator/telegram_bridge.py\n"
+                "Начать: завтра в 18:00.\nСрок: 4 часа.\n"
+                "Приоритет: высокий.\nОтчёт: каждый час.")
+        def update(body):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": body}}
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(temp)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "submit") as intake, \
+             patch.object(v5.scheduler, "register", return_value="S0123456789AB") as register:
+            v5.handle_update_v5(update(text), cfg, self.client)
+            intake.assert_not_called()
+            register.assert_not_called()
+            self.assertIn("Подтвердите расписание", self.client.messages[-1])
+            v5.handle_update_v5(update("Да"), cfg, self.client)
+            register.assert_called_once()
+            intake.assert_not_called()
+            self.assertIn("S0123456789AB", self.client.messages[-1])
+            self.assertIn("не раньше времени начала", self.client.messages[-1])
+
+    def test_relative_schedule_start_is_frozen_at_original_message_date(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        msg = ("Задача: исправь Telegram в orchestrator/telegram_bridge.py\n"
+               "Начать: завтра в 18:00.\nСрок: 4 часа.\nОтчёт: каждый час.")
+        def update(body):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": body}}
+        frozen = datetime(2026, 11, 14, 17, 52, tzinfo=v5.scheduler.TZ)
+        confirmation = datetime(2026, 11, 15, 9, 10, tzinfo=v5.scheduler.TZ)
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(temp)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(v5.time, "time", return_value=frozen.timestamp()), \
+             patch.object(v5.scheduler, "register", return_value="S123") as register:
+            v5.handle_update_v5(update(msg), cfg, self.client)
+        # Same durable file, new process/time: "tomorrow" must stay Nov 15.
+            with patch.object(v5.time, "time", return_value=confirmation.timestamp()):
+                v5.handle_update_v5(update("Да"), cfg, self.client)
+        plan = register.call_args.args[2]
+        self.assertEqual(datetime.fromtimestamp(plan.start_at, v5.scheduler.TZ).day, 15)
+
+    def test_report_clarification_preserves_original_tomorrow_date(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        msg = ("Задача: улучшить интерфейс AI PROF.\n"
+               "Начать: завтра в 18:00.\nСрок: 4 часа.\n"
+               "Отчёт: каждый день час.")
+        def update(body):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": body}}
+        frozen = datetime(2026, 11, 14, 17, 52, tzinfo=v5.scheduler.TZ)
+        later = datetime(2026, 11, 15, 9, 10, tzinfo=v5.scheduler.TZ)
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(temp)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(v5.scheduler, "register", return_value="S321") as register:
+            with patch.object(v5.time, "time", return_value=frozen.timestamp()):
+                v5.handle_update_v5(update(msg), cfg, self.client)
+            with patch.object(v5.time, "time", return_value=later.timestamp()):
+                v5.handle_update_v5(update("каждый час"), cfg, self.client)
+                v5.handle_update_v5(update("Telegram"), cfg, self.client)
+                v5.handle_update_v5(update("Да"), cfg, self.client)
+        register.assert_called_once()
+        plan = register.call_args.args[2]
+        self.assertEqual(datetime.fromtimestamp(plan.start_at, v5.scheduler.TZ).day, 15)
+
+    def test_unclear_report_time_prompts_for_clarification_without_execution(self):
+        cfg = legacy.Config(token="fake", chat_id=-1001, owner_user_id=42)
+        text = ("Задача: улучши интерфейс AI PROF.\nНачать: завтра в 18:00.\n"
+                "Срок: 4 часа.\nПриоритет: высокий.\n"
+                "Отчёт: каждый день час.")
+        def update(body):
+            return {"message": {"chat": {"id": 42, "type": "private"},
+                                "from": {"id": 42}, "text": body}}
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(v5, "OWNER_DRAFT_FILE", Path(temp)/"proposal.json"), \
+             patch.object(v5, "_owner_client", return_value=self.client), \
+             patch.object(legacy, "submit") as intake, \
+             patch.object(v5.scheduler, "register") as register:
+            v5.handle_update_v5(update(text), cfg, self.client)
+            self.assertIn("неоднозначно", self.client.messages[-1])
+            intake.assert_not_called()
+            register.assert_not_called()
+            v5.handle_update_v5(update("каждый час"), cfg, self.client)
+            self.assertIn("выберите раздел", self.client.messages[-1])
+            v5.handle_update_v5(update("Telegram"), cfg, self.client)
+            self.assertIn("Поставить в расписание?", self.client.messages[-1])
+            register.assert_not_called()
 
     def test_review_pass_does_not_claim_completion(self):
         source = {"T": ("active", "ai-prof-control-center", "")}
