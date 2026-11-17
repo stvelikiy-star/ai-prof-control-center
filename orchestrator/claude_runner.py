@@ -1656,7 +1656,7 @@ def apply_validated_changes(
 
 
 def run_self_test(root: Path) -> int:
-    context = load_claude_context(root, "agents/ak-bermet")
+    context = load_claude_context(root, "agents/ai-prof-control-center")
     if set(context) != set(CLAUDE_CONTEXT_FILES) or not all(context.values()):
         raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
     if orch.redact("TOKEN=abc") != "[REDACTED]":

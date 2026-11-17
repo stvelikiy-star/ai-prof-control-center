@@ -219,7 +219,7 @@ def acquire_lock(lock_path: Path):
 
 
 def run_self_test(root: Path) -> int:
-    context = load_context(root, "agents/ak-bermet")
+    context = load_context(root, "agents/ai-prof-control-center")
     if not all(context.values()):
         raise RuntimeError("SELF_TEST_CONTEXT_LOAD_FAILED")
     if redact("TOKEN=abc") != "[REDACTED]":

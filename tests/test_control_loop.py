@@ -360,12 +360,10 @@ class ControlLoopTests(unittest.TestCase):
                 [stage for stage, _argv in legacy_commands],
                 [
                     "kol_approved_publisher_pre",
-                    "ak_bermet_approved_publisher_pre",
                     "operations",
                     "codex_stage_01b",
                     "codex",
                     "kol_approved_publisher_post",
-                    "ak_bermet_approved_publisher_post",
                 ],
             )
             stages = [stage for stage, _argv in commands]
@@ -373,13 +371,11 @@ class ControlLoopTests(unittest.TestCase):
                 stages,
                 [
                     "kol_approved_publisher_pre",
-                    "ak_bermet_approved_publisher_pre",
                     "ai_prof_approved_publisher_pre",
                     "operations",
                     "codex_stage_01b",
                     "codex",
                     "kol_approved_publisher_post",
-                    "ak_bermet_approved_publisher_post",
                     "ai_prof_approved_publisher_post",
                 ],
             )
