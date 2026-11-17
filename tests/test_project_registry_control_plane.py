@@ -125,20 +125,9 @@ class ProjectRegistryControlPlaneTests(unittest.TestCase):
         self.assertFalse(project["allow_merge"])
         self.assertFalse(project["allow_deployment"])
 
-    def test_ak_bermet_registry_contains_no_removed_hold_tests(self):
-        checks = self.by_id["ak-bermet"]["code_required_checks"]
-        joined = "\n".join(checks)
-        self.assertNotIn("holds-availability.test.ts", joined)
-        self.assertNotIn("availability-hold-security.contract.test.mjs", joined)
-        self.assertEqual(
-            checks,
-            [
-                "npm run lint",
-                "npx tsc --noEmit --incremental false",
-                "npm run test:inspection",
-                "npm run build",
-            ],
-        )
+    def test_retired_ak_bermet_projects_not_registered(self):
+        self.assertNotIn("ak-bermet", self.by_id)
+        self.assertNotIn("ak-bermet-pilot", self.by_id)
 
     def test_control_center_ci_covers_main_and_general_work_branches(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

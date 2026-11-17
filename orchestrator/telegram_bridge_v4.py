@@ -16,7 +16,7 @@ import re
 from pathlib import PurePosixPath
 
 import telegram_bridge as legacy
-import telegram_bridge_v3 as v3
+import telegram_bridge_v2 as v2
 
 _ORIGINAL_SELECT_SCOPE = legacy.select_scope
 _EXPLICIT_PATH_RE = re.compile(
@@ -70,7 +70,7 @@ def select_scope_v4(command, project_id: str, project: dict) -> str:
 def main() -> int:
     legacy.select_scope = select_scope_v4
     legacy.SUBMIT_TASK = SUBMIT_TASK_V2
-    return v3.main()
+    return v2.main()
 
 
 if __name__ == "__main__":

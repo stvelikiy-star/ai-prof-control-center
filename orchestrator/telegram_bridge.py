@@ -514,9 +514,6 @@ def select_scope(command: Command, project_id: str, project: dict) -> str:
         preferences.append("tests")
     if re.search(r"\b(doc|docs|documentation|guide|manual)\b", text):
         preferences.append("docs")
-    if project_id == "ak-bermet":
-        # General AK BERMET application work is constrained to application source.
-        preferences.append("src")
 
     for preference in preferences:
         for _pattern, candidate in candidates:

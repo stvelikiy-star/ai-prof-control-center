@@ -42,13 +42,6 @@ SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
 )
 ALLOWED_CHECK_BINARIES = {"git", "node", "npm", "npx", "python3"}
-AK_BERMET_PROJECT = Path("/home/agent/projects/ak-bermet")
-LEGACY_AK_BERMET_INSPECTION_CHECK = (
-    "node --test --experimental-strip-types src/lib/inspection-rules.test.ts"
-)
-AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
-
-
 class AutoRepairError(RuntimeError):
     pass
 
@@ -246,21 +239,6 @@ def validated_check_argv(command: str, required_checks: list[str]) -> list[str]:
     if not argv or argv[0] not in ALLOWED_CHECK_BINARIES:
         raise AutoRepairError(f"failed check binary is not allowlisted: {argv[:1]}")
     return argv
-
-
-def normalize_legacy_ak_bermet_check(
-    task_text: str, project: Path, command: str
-) -> tuple[str, str]:
-    if project != AK_BERMET_PROJECT or command != LEGACY_AK_BERMET_INSPECTION_CHECK:
-        return task_text, command
-    checks = parse_required_checks(task_text)
-    if LEGACY_AK_BERMET_INSPECTION_CHECK not in checks:
-        raise AutoRepairError("legacy AK BERMET check is absent from Required-Checks")
-    checks = [
-        AK_BERMET_INSPECTION_CHECK if item == LEGACY_AK_BERMET_INSPECTION_CHECK else item
-        for item in checks
-    ]
-    return set_required_checks(task_text, checks), AK_BERMET_INSPECTION_CHECK
 
 
 def parse_scope_files(task_text: str) -> tuple[str, ...]:
@@ -506,7 +484,6 @@ def recover_check_failure(paths: Paths, task: Path, max_cycles: int) -> bool:
     if not project.is_dir():
         raise AutoRepairError(f"project is not accessible: {project}")
     command = match.group(1).strip()
-    task_text, command = normalize_legacy_ak_bermet_check(task_text, project, command)
     required_checks = parse_required_checks(task_text)
     argv = validated_check_argv(command, required_checks)
     scope = parse_scope_files(task_text)

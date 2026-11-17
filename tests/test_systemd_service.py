@@ -24,7 +24,7 @@ class ControlCenterServiceTests(unittest.TestCase):
             if line.startswith("ReadWritePaths=")
         )
         self.assertIn("/home/agent/.local/state/ai-prof-control-center", line)
-        self.assertIn("/home/agent/projects/ak-bermet", line)
+        self.assertNotIn("/home/agent/projects/ak-bermet", line)
         self.assertIn(
             "/home/agent/projects/ai-prof-control-center-maintenance", line
         )

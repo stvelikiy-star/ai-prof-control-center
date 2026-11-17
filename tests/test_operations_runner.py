@@ -45,9 +45,11 @@ class OperationsRunnerTests(unittest.TestCase):
             repo / "node_modules/.bin/supabase",
         )
 
-    def test_profile_resolution_and_unknown_rejection(self):
-        profile = operations.resolve_profile("ak-bermet-supabase-rpc-deploy")
-        self.assertEqual(profile.repository, Path("/home/agent/projects/ak-bermet"))
+    def test_retired_operation_profiles_rejected(self):
+        for key in ("ak-bermet-supabase-rpc-deploy", "ak-bermet-production-prepare-v6",
+                    "ak-bermet-sheets-mirror-dry-run", "ak-bermet-staff-auth-activate-dev"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                operations.resolve_profile(key)
         with self.assertRaises(ValueError):
             operations.resolve_profile("anything-else")
 

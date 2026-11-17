@@ -42,10 +42,6 @@ MAINTENANCE_PROJECT_PATH = "/home/agent/projects/ai-prof-control-center-maintena
 KOL_PROJECT_PATH = "/home/agent/projects/kol-ai-prof-v4-runner"
 IN_FLIGHT_QUEUES = ("active", "review", "pending_codex", "approved")
 KOL_V4_QUEUES = ("pending", "active", "review", "pending_codex", "approved")
-AK_BERMET_PUBLISHER_STAGES = {
-    "ak_bermet_approved_publisher_pre",
-    "ak_bermet_approved_publisher_post",
-}
 MAX_TASK_BYTES = 1024 * 1024
 KOL_V4_ISOLATION_MARKER = "kol-v4-isolation"
 _ORIGINAL_CAMPAIGN_TICK_ALL = base.control_loop.campaign_runner.tick_all
@@ -237,19 +233,19 @@ def _commands_with_night_safe_ai_prof_gate(
             for stage, argv in established
             if stage != "stage_01a"
         ]
-    if isolated:
-        established = [
-            (stage, argv)
-            for stage, argv in established
-            if stage not in AK_BERMET_PUBLISHER_STAGES
-        ]
+    # Defensive filter: never execute retired Ak Bermet publisher stages,
+    # including when old adapters supply them.
+    established = [
+        (stage, argv) for stage, argv in established
+        if not stage.startswith("ak_bermet_approved_publisher_")
+    ]
 
     ai_prof_publisher_gate = base._publisher_argv(
         root,
         runtime,
         "ai_prof_approved_task_publisher_gate_v2.py",
     )
-    pre_end = 1 if isolated else 2
+    pre_end = 1
     post_start = len(established) - pre_end
     return [
         *established[:pre_end],
@@ -275,7 +271,6 @@ def _night_self_test() -> int:
         stages = [name for name, _ in commands]
         expected = [
             "kol_approved_publisher_pre",
-            "ak_bermet_approved_publisher_pre",
             "ai_prof_approved_publisher_pre",
             "auto_repair_pre",
             "operations",
@@ -284,7 +279,6 @@ def _night_self_test() -> int:
             "auto_repair_post",
             "codex",
             "kol_approved_publisher_post",
-            "ak_bermet_approved_publisher_post",
             "ai_prof_approved_publisher_post",
         ]
         if stages != expected:
@@ -305,7 +299,7 @@ def _night_self_test() -> int:
         )
         isolated = _commands_with_night_safe_ai_prof_gate(root, runtime)
         isolated_stages = [name for name, _ in isolated]
-        if any(name in isolated_stages for name in AK_BERMET_PUBLISHER_STAGES):
+        if any(name.startswith("ak_bermet_approved_publisher_") for name in isolated_stages):
             raise RuntimeError("NIGHT_SELF_TEST_KOL_ISOLATION_FAILED")
         if not _kol_v4_isolation_marker(runtime).is_file():
             raise RuntimeError("NIGHT_SELF_TEST_KOL_LATCH_FAILED")

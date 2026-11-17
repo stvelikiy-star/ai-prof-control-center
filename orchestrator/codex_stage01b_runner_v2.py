@@ -55,8 +55,6 @@ _NEW_FINAL_DIRECTIVE = (
     "file."
 )
 _TASK_ID_FROM_LOG = re.compile(r"^(?P<task>.+)-01B-\d{8}T\d{6}Z\.log$")
-_AK_BERMET_INSPECTION_CHECK = "npm run test:inspection"
-_AK_BERMET_INSPECTION_ARGV = ["npm", "run", "test:inspection"]
 _KOL_RELEASE_SOURCE_CHECK = "npm run check:release-source"
 _KOL_RELEASE_SOURCE_ARGV = ["npm", "run", "check:release-source"]
 _KOL_REQUIRED_CHECKS = (
@@ -84,11 +82,6 @@ def _install_exact_check(command: str, argv: list[str], label: str) -> None:
 
 def install_v2_required_check_allowlist() -> None:
     """Install exact repository-owned checks required by registered projects."""
-    _install_exact_check(
-        _AK_BERMET_INSPECTION_CHECK,
-        _AK_BERMET_INSPECTION_ARGV,
-        "AK BERMET inspection",
-    )
     _install_exact_check(
         _KOL_RELEASE_SOURCE_CHECK,
         _KOL_RELEASE_SOURCE_ARGV,
@@ -198,10 +191,6 @@ def process_one_v2(paths) -> int:
 def run_self_test_v2(root: Path) -> int:
     verify_v2_required_check_contract()
     _ORIGINAL_SELF_TEST(root)
-    if legacy.core.ALLOWED_COMMANDS.get(_AK_BERMET_INSPECTION_CHECK) != (
-        _AK_BERMET_INSPECTION_ARGV
-    ):
-        raise RuntimeError("SELF_TEST_CODEX_V2_AK_BERMET_CHECK_ALLOWLIST_FAILED")
     if legacy.core.ALLOWED_COMMANDS.get(_KOL_RELEASE_SOURCE_CHECK) != (
         _KOL_RELEASE_SOURCE_ARGV
     ):

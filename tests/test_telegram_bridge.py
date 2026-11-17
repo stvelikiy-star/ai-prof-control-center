@@ -232,28 +232,6 @@ class TelegramBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(bridge.BridgeError, "intake is unavailable"):
                 bridge.submit(command, projects)
 
-    def test_plain_ak_bermet_scope_is_narrow_and_request_aware(self):
-        project = {
-            "allowed_scope": [
-                "README.md", "docs/**", "src/**", "tests/**",
-                "supabase/migrations/**",
-            ],
-            "work_prefixes": ["feature/", "fix/"],
-        }
-        cases = {
-            "Fix the checkout calculation": "src",
-            "Add regression tests": "tests",
-            "Update documentation": "docs",
-            "Correct README": "README.md",
-            "Add a Supabase migration for bookings": "supabase/migrations",
-        }
-        for instructions, expected in cases.items():
-            command = bridge.parse_command(f"/ai task ak-bermet | Title | {instructions}")
-            with self.subTest(instructions=instructions):
-                self.assertEqual(
-                    bridge.select_scope(command, "ak-bermet", project), expected,
-                )
-
     def test_plain_task_defaults_to_exact_real_project(self):
         command = bridge.parse_command("/ai task Fix the booking form")
         self.assertEqual(command.project, "ai-prof-control-center")
