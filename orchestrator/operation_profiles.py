@@ -23,40 +23,6 @@ AI_PROF_CONTROL_CENTER_HEALTH_CHECK = OperationProfile(
 )
 
 
-AK_BERMET_SUPABASE_RPC_DEPLOY = OperationProfile(
-    key="ak-bermet-supabase-rpc-deploy",
-    repository=Path("/home/agent/projects/ak-bermet"),
-    base_branch="develop",
-    expected_migration=(
-        "supabase/migrations/"
-        "20260727000100_manager_inspection_blocking_problem.sql"
-    ),
-)
-
-AK_BERMET_PRODUCTION_PREPARE_V6 = OperationProfile(
-    key="ak-bermet-production-prepare-v6",
-    repository=Path("/home/agent/projects/ak-bermet"),
-    base_branch="main",
-    expected_migration="",
-    kind="release-v6-prepare",
-)
-
-AK_BERMET_SHEETS_MIRROR_DRY_RUN = OperationProfile(
-    key="ak-bermet-sheets-mirror-dry-run",
-    repository=Path("/home/agent/projects/ak-bermet"),
-    base_branch="main",
-    expected_migration="",
-    kind="sheets-mirror-dry-run",
-)
-
-AK_BERMET_STAFF_AUTH_ACTIVATE_DEV = OperationProfile(
-    key="ak-bermet-staff-auth-activate-dev",
-    repository=Path("/home/agent/projects/ak-bermet"),
-    base_branch="main",
-    expected_migration="",
-    kind="staff-auth-activate-dev",
-)
-
 KOL_READONLY_FULL_AUDIT = OperationProfile(
     key="kol-readonly-full-audit",
     repository=Path("/home/agent/Загрузки/kol-travel-platform"),
@@ -69,10 +35,6 @@ KOL_READONLY_FULL_AUDIT = OperationProfile(
 PROFILES = {
     AI_PROF_CONTROL_CENTER_HEALTH_CHECK.key: AI_PROF_CONTROL_CENTER_HEALTH_CHECK,
     KOL_READONLY_FULL_AUDIT.key: KOL_READONLY_FULL_AUDIT,
-    AK_BERMET_SUPABASE_RPC_DEPLOY.key: AK_BERMET_SUPABASE_RPC_DEPLOY,
-    AK_BERMET_PRODUCTION_PREPARE_V6.key: AK_BERMET_PRODUCTION_PREPARE_V6,
-    AK_BERMET_SHEETS_MIRROR_DRY_RUN.key: AK_BERMET_SHEETS_MIRROR_DRY_RUN,
-    AK_BERMET_STAFF_AUTH_ACTIVATE_DEV.key: AK_BERMET_STAFF_AUTH_ACTIVATE_DEV,
 }
 
 

@@ -57,8 +57,6 @@ jobs:
           }
 
           make_repo /home/agent/projects/ai-prof-pilot-runtime develop
-          make_repo /home/agent/projects/ak-bermet-agent-pilot develop
-          make_repo /home/agent/projects/ak-bermet main
           make_repo /home/agent/projects/ai-prof-control-center-maintenance maintenance/base
           make_repo "/home/agent/Загрузки/kol-travel-platform" main
           make_repo /home/agent/projects/resort-os main
@@ -67,22 +65,6 @@ jobs:
           printf '# telegram fixture\n' > /home/agent/projects/ai-prof-control-center-maintenance/orchestrator/telegram_bridge.py
           git -C /home/agent/projects/ai-prof-control-center-maintenance add orchestrator/telegram_bridge.py
           git -C /home/agent/projects/ai-prof-control-center-maintenance commit -q -m 'add maintenance fixture'
-
-          cat > /home/agent/projects/ak-bermet/package.json <<'JSON'
-          {
-            "scripts": {
-              "lint": "true",
-              "test:inspection": "true",
-              "test:housekeeping": "true",
-              "test:technician": "true",
-              "build": "true"
-            }
-          }
-          JSON
-          git -C /home/agent/projects/ak-bermet add package.json
-          git -C /home/agent/projects/ak-bermet commit -q -m 'add package fixture'
-          git -C /home/agent/projects/ak-bermet branch develop || true
-          git -C /home/agent/projects/ak-bermet branch integration/ak-bermet-3day || true
 
           cat > "/home/agent/Загрузки/kol-travel-platform/package.json" <<'JSON'
           {
@@ -127,7 +109,6 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/orchestrator:${{ github.workspace }}
         run: |
           python3 orchestrator/approved_task_publisher.py --self-test
-          python3 orchestrator/ak_bermet_approved_task_publisher_gate.py --self-test
 
       - name: Self-maintenance exact unittest gate
         env:

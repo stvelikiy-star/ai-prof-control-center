@@ -186,18 +186,6 @@ class AutoRepairRunnerTests(unittest.TestCase):
                 self.assertEqual(runner.dirty_paths(project), set())
                 self.assertEqual(check.call_count, 2)
 
-    def test_legacy_ak_bermet_check_is_normalized(self):
-        text = (
-            'Required-Checks: npm run lint, '
-            + runner.LEGACY_AK_BERMET_INSPECTION_CHECK
-            + ', npm run build\n'
-        )
-        updated, command = runner.normalize_legacy_ak_bermet_check(
-            text, runner.AK_BERMET_PROJECT, runner.LEGACY_AK_BERMET_INSPECTION_CHECK
-        )
-        self.assertEqual(command, runner.AK_BERMET_INSPECTION_CHECK)
-        self.assertIn(runner.AK_BERMET_INSPECTION_CHECK, updated)
-        self.assertNotIn(runner.LEGACY_AK_BERMET_INSPECTION_CHECK, updated)
 
 
 if __name__ == '__main__':

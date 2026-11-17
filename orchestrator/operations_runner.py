@@ -19,9 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ak_bermet_release_v6_prepare as release_v6
-import ak_bermet_sheets_mirror_dry_run as sheets_mirror
-import ak_bermet_staff_auth_activate_dev as staff_auth
 import kol_readonly_audit
 from operation_profiles import OperationProfile, resolve_profile
 from runtime_paths import DEFAULT_STATE_ROOT
@@ -73,13 +70,6 @@ UNSAFE_HEALTH_ENVIRONMENT_NAMES = UNSAFE_ENVIRONMENT_NAMES | {
     "PYTHONBREAKPOINT",
     "PYTHONWARNINGS",
 }
-LEGACY_SHEETS_DRY_RUN_GOAL = "Sheets mirror runtime dry-run"
-LEGACY_SHEETS_DRY_RUN_PROFILE = "ak-bermet-sheets-mirror-dry-run"
-LEGACY_SHEETS_DRY_RUN_PROJECT = "/home/agent/projects/ak-bermet"
-LEGACY_STAFF_AUTH_ACTIVATE_GOAL = "Activate 17 DEV staff accounts"
-LEGACY_STAFF_AUTH_ACTIVATE_PROFILE = "ak-bermet-staff-auth-activate-dev"
-LEGACY_STAFF_AUTH_ACTIVATE_PROJECT = "/home/agent/projects/ak-bermet"
-
 
 class OperationBlocked(RuntimeError):
     pass
@@ -267,53 +257,10 @@ def restore_tsbuildinfo(repository: Path, before: bytes | None) -> None:
         path.write_bytes(before)
 
 
-def execute_release_v6_prepare(profile: OperationProfile, requested_path: str) -> str:
-    if requested_path != str(profile.repository):
-        raise OperationBlocked("operation repository does not exactly match registered path")
-    if profile.kind != "release-v6-prepare":
-        raise OperationBlocked("invalid release prepare operation kind")
-    report = release_v6.prepare()
-    if report.repository != str(profile.repository):
-        raise OperationFailed("release prepare report repository mismatch")
-    if report.production_changed:
-        raise OperationFailed("read-only release prepare reported a production mutation")
-    blockers = list(report.blockers or [])
-    if blockers:
-        safe = ",".join(redact(item).replace("\n", " ")[:180] for item in blockers)
-        raise OperationBlocked(f"AK_BERMET_V6_PREPARE:{safe}")
-    return "release_ready"
 
 
-def execute_sheets_mirror_dry_run(profile: OperationProfile, requested_path: str) -> str:
-    if requested_path != str(profile.repository):
-        raise OperationBlocked("operation repository does not exactly match registered path")
-    if profile.kind != "sheets-mirror-dry-run":
-        raise OperationBlocked("invalid Sheets mirror operation kind")
-    node_bin = locate_node_bin()
-    environment = operation_environment(node_bin)
-    try:
-        result = sheets_mirror.execute(node_bin / "node", requested_path, environment)
-    except sheets_mirror.RuntimeDryRunBlocked as exc:
-        raise OperationBlocked(str(exc)) from exc
-    except sheets_mirror.RuntimeDryRunFailed as exc:
-        raise OperationFailed(str(exc)) from exc
-    return result.summary()
 
 
-def execute_staff_auth_activate_dev(profile: OperationProfile, requested_path: str) -> str:
-    if requested_path != str(profile.repository):
-        raise OperationBlocked("operation repository does not exactly match registered path")
-    if profile.kind != "staff-auth-activate-dev":
-        raise OperationBlocked("invalid staff Auth activation operation kind")
-    node_bin = locate_node_bin()
-    environment = operation_environment(node_bin)
-    try:
-        result = staff_auth.execute(node_bin / "node", requested_path, environment)
-    except staff_auth.StaffAuthActivationBlocked as exc:
-        raise OperationBlocked(str(exc)) from exc
-    except staff_auth.StaffAuthActivationFailed as exc:
-        raise OperationFailed(str(exc)) from exc
-    return result.summary()
 
 
 def execute_control_center_health_check(
@@ -387,12 +334,6 @@ def execute_profile(profile: OperationProfile, requested_path: str,
             raise OperationBlocked(str(exc)) from exc
     if profile.kind == "control-center-health-check":
         return execute_control_center_health_check(profile, requested_path)
-    if profile.kind == "release-v6-prepare":
-        return execute_release_v6_prepare(profile, requested_path)
-    if profile.kind == "sheets-mirror-dry-run":
-        return execute_sheets_mirror_dry_run(profile, requested_path)
-    if profile.kind == "staff-auth-activate-dev":
-        return execute_staff_auth_activate_dev(profile, requested_path)
     if profile.kind != "migration":
         raise OperationBlocked("unsupported operation profile kind")
 
@@ -454,20 +395,7 @@ def execute_profile(profile: OperationProfile, requested_path: str,
 
 
 def legacy_runtime_profile(data: dict[str, str]) -> str | None:
-    """Narrow compatibility bridge for already-published Telegram commands.
-
-    Generic /ai task intake predates runtime operation profiles and labels the
-    task as code. Only exact immutable goal/project pairs are promoted. The
-    user-supplied Instructions and Scope-Files are never executed by this path.
-    """
-    if data.get("Execution-Mode") != "code" or data.get("Operation-Profile") != "none":
-        return None
-    project = data.get("Project-Path")
-    goal = data.get("Goal")
-    if project == LEGACY_SHEETS_DRY_RUN_PROJECT and goal == LEGACY_SHEETS_DRY_RUN_GOAL:
-        return LEGACY_SHEETS_DRY_RUN_PROFILE
-    if project == LEGACY_STAFF_AUTH_ACTIVATE_PROJECT and goal == LEGACY_STAFF_AUTH_ACTIVATE_GOAL:
-        return LEGACY_STAFF_AUTH_ACTIVATE_PROFILE
+    # Retired legacy operation promotions are deliberately disabled.
     return None
 
 

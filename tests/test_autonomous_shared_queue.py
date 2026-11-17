@@ -91,6 +91,13 @@ class MainQueueIntakeTests(unittest.TestCase):
         p = mock.patch.object(intake, "QUEUE_ROOT", Path(self.temp.name))
         p.start()
         self.addCleanup(p.stop)
+        # Unit fixture must not inherit the live FIFO route state.
+        for name, filename in (("MODE_FILE", "route.json"),
+                               ("ROUTE_LOCK", "route.lock")):
+            patcher = mock.patch.object(worker.route, name,
+                                        Path(self.temp.name) / filename)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_owner_contract_exact(self):
         issue = owner_issue()
@@ -280,6 +287,20 @@ class QueueConsumerTests(unittest.TestCase):
         p = mock.patch.object(intake, "QUEUE_ROOT", Path(self.temp.name))
         p.start()
         self.addCleanup(p.stop)
+        # Isolate the unit fixture from the real host global admission lock.
+        lease_patcher = mock.patch.object(
+            worker.admission, "acquire", return_value=mock.MagicMock(fd=73)
+        )
+        lease_patcher.start()
+        self.addCleanup(lease_patcher.stop)
+        # These fixtures exercise the legacy lane regardless of the live host
+        # route. Keep both route reads and flock writes inside the fixture.
+        for name, filename in (("MODE_FILE", "route.json"),
+                               ("ROUTE_LOCK", "route.lock")):
+            patcher = mock.patch.object(worker.route, name,
+                                        Path(self.temp.name) / filename)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def setup_job(self, number=500):
         record = intake.validate_contract(owner_issue(number))

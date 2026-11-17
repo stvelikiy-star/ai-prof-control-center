@@ -307,8 +307,7 @@ class AIProfNightTerminalReconcilerTests(unittest.TestCase):
         self.assertIn("operations", stages)
         self.assertIn("codex", stages)
         self.assertEqual(stages[0], "kol_approved_publisher_pre")
-        self.assertEqual(stages[1], "ak_bermet_approved_publisher_pre")
-        self.assertEqual(stages[2], "ai_prof_approved_publisher_pre")
+        self.assertEqual(stages[1], "ai_prof_approved_publisher_pre")
         self.assertEqual(stages[-1], "ai_prof_approved_publisher_post")
 
     def test_night_service_keeps_stage01a_when_no_maintenance_task_in_flight(self):

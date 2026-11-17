@@ -241,20 +241,13 @@ def _commands_with_publishers(
     root: Path,
     runtime: Path,
 ) -> list[tuple[str, list[str]]]:
-    """Preserve the established KOL/AK BERMET publisher composition."""
+    """Preserve the established KOL publisher composition."""
     normal = _upgrade_codex_stage01b(root, _ORIGINAL_CHILD_COMMANDS(root, runtime))
     kol_publisher = _publisher_argv(root, runtime, "approved_task_publisher_gate.py")
-    ak_bermet_publisher = _publisher_argv(
-        root,
-        runtime,
-        "ak_bermet_approved_task_publisher_gate.py",
-    )
     return [
         ("kol_approved_publisher_pre", kol_publisher),
-        ("ak_bermet_approved_publisher_pre", ak_bermet_publisher),
         *normal,
         ("kol_approved_publisher_post", kol_publisher),
-        ("ak_bermet_approved_publisher_post", ak_bermet_publisher),
     ]
 
 
@@ -269,8 +262,8 @@ def _commands_with_ai_prof_publisher_gate(
         runtime,
         "ai_prof_approved_task_publisher_gate.py",
     )
-    pre_end = 2
-    post_start = len(established) - 2
+    pre_end = 1
+    post_start = len(established) - 1
     return [
         *established[:pre_end],
         ("ai_prof_approved_publisher_pre", ai_prof_publisher_gate),

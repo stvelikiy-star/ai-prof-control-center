@@ -33,75 +33,7 @@ def init_project(path: Path) -> None:
 
 
 class SubmitTaskTests(unittest.TestCase):
-    def test_production_registry_contains_real_and_pilot_ak_bermet_projects(self):
-        root = MODULE_PATH.parents[1]
-        registry = json.loads(
-            (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
-        )
-        self.assertEqual(registry["version"], 1)
-        projects = {item["project_id"]: item for item in registry["projects"]}
-        self.assertEqual(projects["ai-prof-pilot"], {
-            "project_id": "ai-prof-pilot",
-            "path": "/home/agent/projects/ai-prof-pilot-runtime",
-            "enabled": False,
-            "base_branch": "develop",
-            "work_prefixes": ["feature/", "fix/"],
-            "allowed_scope": ["README.md", "docs/**", "tests/**"],
-            "agent_context": "agents/ai-prof-pilot",
-            "allow_commits": False,
-            "allow_push": False,
-            "allow_merge": False,
-            "allow_deployment": False,
-        })
-        self.assertEqual(projects["ak-bermet"]["path"], "/home/agent/projects/ak-bermet")
-        self.assertEqual(
-            projects["ak-bermet-pilot"]["path"],
-            "/home/agent/projects/ak-bermet-agent-pilot",
-        )
-        self.assertIn("src/**", projects["ak-bermet"]["allowed_scope"])
-        self.assertIn("tests/**", projects["ak-bermet"]["allowed_scope"])
-        self.assertIn("docs/**", projects["ak-bermet"]["allowed_scope"])
-        self.assertIn("supabase/migrations/**", projects["ak-bermet"]["allowed_scope"])
-        self.assertNotIn("**", projects["ak-bermet"]["allowed_scope"])
-        self.assertEqual(
-            projects["ak-bermet"]["code_required_commands"],
-            ["git", "python3", "node", "npm", "npx"],
-        )
-        self.assertEqual(projects["ak-bermet"]["code_toolchain"], "nvm-node")
 
-    def test_ak_bermet_task_metadata_declares_node_toolchain_and_checks(self):
-        root = MODULE_PATH.parents[1]
-        registry = json.loads(
-            (root / "orchestrator/projects.json").read_text(encoding="utf-8"),
-        )
-        project = next(
-            item for item in registry["projects"] if item["project_id"] == "ak-bermet"
-        ).copy()
-        # Keep npm script validation in an isolated fixture. The unrelated
-        # AK BERMET checkout need not exist on this Ubuntu host.
-        with tempfile.TemporaryDirectory() as tmp:
-            project["path"] = tmp
-            (Path(tmp) / "package.json").write_text(
-                json.dumps({"scripts": {
-                    "lint": "eslint .",
-                    "test:inspection": "node --test",
-                    "build": "next build",
-                }}), encoding="utf-8",
-            )
-            text = submit.render_task(
-                project, "AK_BERMET_TEST", "Fix", "Fix safely", "fix/test", ["src"],
-            )
-        self.assertIn("Required-Commands: git, python3, node, npm, npx", text)
-        self.assertIn(
-            "Required-Checks: npm run lint, npx tsc --noEmit --incremental false, "
-            "npm run test:inspection, npm run build",
-            text,
-        )
-        self.assertNotIn("holds-availability.test.ts", text)
-        self.assertNotIn("availability-hold-security.contract.test.mjs", text)
-        self.assertNotIn("node --test --experimental-strip-types src/lib/inspection-rules.test.ts", text)
-        self.assertNotIn("npm test", text)
-        self.assertEqual(submit.SCOPE_COUNT_LIMIT, 20)
 
     def test_task_generation_rejects_configured_missing_npm_script(self):
         with tempfile.TemporaryDirectory() as tmp:

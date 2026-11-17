@@ -32,31 +32,11 @@ CURRENT_CHECKS = [
 
 
 class CampaignMigrationChecksTests(unittest.TestCase):
-    def _ak_bermet_project(self):
-        registry = json.loads(
-            (ROOT / "orchestrator/projects.json").read_text(encoding="utf-8")
-        )
-        return next(
-            item
-            for item in registry["projects"]
-            if item["project_id"] == "ak-bermet"
-        )
-
-    def test_removed_hold_contracts_are_not_required_by_current_registry(self):
-        checks = self._ak_bermet_project()["code_required_checks"]
-        self.assertNotIn(LEGACY_HOLD_CHECK, checks)
-        self.assertNotIn(LEGACY_MIGRATION_CHECK, checks)
-
-    def test_ak_bermet_current_checks_are_exact_and_ordered(self):
-        checks = self._ak_bermet_project()["code_required_checks"]
-        self.assertEqual(checks, CURRENT_CHECKS)
-
-    def test_every_current_ak_bermet_check_is_effective_stage01b_allowlisted(self):
-        codex_stage01b_runner_v2.install_v2_required_check_allowlist()
-        effective = codex_stage01b_runner_v2.legacy.core.ALLOWED_COMMANDS
-        for check in CURRENT_CHECKS:
-            with self.subTest(check=check):
-                self.assertIn(check, effective)
+    def test_retired_project_absent_from_registry(self):
+        registry = json.loads((ROOT / "orchestrator/projects.json").read_text())
+        ids = {item["project_id"] for item in registry["projects"]}
+        self.assertNotIn("ak-bermet", ids)
+        self.assertNotIn("ak-bermet-pilot", ids)
 
 
 if __name__ == "__main__":

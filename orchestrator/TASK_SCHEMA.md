@@ -83,7 +83,7 @@ credentials и production data не входят в capability controller.
 
 ```text
 --execution-mode operations
---operation-profile ak-bermet-supabase-rpc-deploy
+--operation-profile ai-prof-control-center-health-check
 ```
 
 Остальные аргументы intake остаются обязательными для совместимости схемы, но

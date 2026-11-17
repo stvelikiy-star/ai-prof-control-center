@@ -42,7 +42,7 @@ Tasks:
 /ai logs <TASK_ID>            — recent redacted task logs
 /ai blockers <project>        — current project blockers
 /ai task <project> | <title> | <instructions>
-/ai task <text>               — project: ak-bermet
+/ai task <project> | <title> | <instructions> — explicit project required
 
 Git diagnostics (read-only):
 /ai git <project> status
